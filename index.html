@@ -3226,7 +3226,6 @@ function setSnapStatus(type, msg) {
 async function identifyFoodFromImage(b64, mime, extraDesc) {
   setSnapStatus('loading', '🤖 Identifying food...');
   const prompt = `Look at this food photo${extraDesc ? ' (extra context: ' + extraDesc + ')' : ''}.
-
 Identify what food/meal is in the image and estimate its nutritional content.
 Return ONLY a JSON object with no extra text:
 {
@@ -3238,18 +3237,20 @@ Return ONLY a JSON object with no extra text:
   "carbs": 60,
   "fat": 12
 }`;
-
   try {
-    const res = await fetch('https://blue-poetry-b2ac.vinayaknehwal98.workers.dev', {
+    const res = await fetch('https://api.groq.com/openai/v1/chat/completions', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer YOUR_GROQ_KEY_HERE'
+      },
       body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
+        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
         max_tokens: 500,
         messages: [{
           role: 'user',
           content: [
-            { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
+            { type: 'image_url', image_url: { url: `data:${mime};base64,${b64}` } },
             { type: 'text', text: prompt }
           ]
         }]
@@ -3257,18 +3258,16 @@ Return ONLY a JSON object with no extra text:
     });
     if (!res.ok) throw new Error('API ' + res.status);
     const data = await res.json();
-    const raw = data.content.find(b => b.type === 'text')?.text || '';
-// Strip markdown code blocks if present
-const cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
-const match = cleaned.match(/\{[\s\S]*\}/);
-if (!match) throw new Error('No JSON');
-const food = JSON.parse(match[0]);
+    const raw = data.choices?.[0]?.message?.content || '';
+    const cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const match = cleaned.match(/\{[\s\S]*\}/);
+    if (!match) throw new Error('No JSON');
+    const food = JSON.parse(match[0]);
     showSnapResult(food);
   } catch(err) {
     setSnapStatus('error', 'Could not identify: ' + err.message + '. Try describing it below.');
   }
 }
-
 async function identifyFoodFromText(desc) {
   setSnapStatus('loading', '🤖 Looking up macros...');
   const prompt = `The user ate: "${desc}"
