@@ -3258,9 +3258,11 @@ Return ONLY a JSON object with no extra text:
     if (!res.ok) throw new Error('API ' + res.status);
     const data = await res.json();
     const raw = data.content.find(b => b.type === 'text')?.text || '';
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('No JSON');
-    const food = JSON.parse(match[0]);
+// Strip markdown code blocks if present
+const cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+const match = cleaned.match(/\{[\s\S]*\}/);
+if (!match) throw new Error('No JSON');
+const food = JSON.parse(match[0]);
     showSnapResult(food);
   } catch(err) {
     setSnapStatus('error', 'Could not identify: ' + err.message + '. Try describing it below.');
