@@ -1211,7 +1211,7 @@
       <div class="drop-title" id="dropTitle">Tap to upload file</div>
       <div class="drop-sub" id="dropSub">JSON diet file · plain text · diet description<br>Any format works — AI will convert it</div>
     </div>
-    <input type="file" id="importFileInput" accept=".json,.txt,.csv" style="display:none" onchange="handleImportFile(this)">
+ <input type="file" id="importFileInput" accept=".json,.txt,.csv,image/*" style="display:none" onchange="handleImportFile(this)">
 
     <div style="position:relative;margin-bottom:12px;">
       <textarea id="importPasteArea"
@@ -3597,28 +3597,122 @@ function handleImportFile(input) {
 
 function processImportFile(file) {
   const name = file.name;
-  document.getElementById('dropIcon').textContent = '📎';
+  const isImage = file.type.startsWith('image/');
+
+  document.getElementById('dropIcon').textContent = isImage ? '🖼️' : '📎';
   document.getElementById('dropTitle').textContent = name;
   document.getElementById('dropSub').textContent = `${(file.size/1024).toFixed(1)} KB · parsing...`;
+
+  if (isImage) {
+    const reader = new FileReader();
+    reader.onload = async (e) => {
+      const b64 = e.target.result.split(',')[1];
+      const mime = file.type || 'image/jpeg';
+      await parseImageWithAI(b64, mime);
+    };
+    reader.readAsDataURL(file);
+    return;
+  }
 
   const reader = new FileReader();
   reader.onload = async (e) => {
     const text = e.target.result;
-    // Try direct JSON parse first
     if (name.endsWith('.json')) {
       try {
         const parsed = JSON.parse(text);
-        // Check if it's already in our meal format
         if (Array.isArray(parsed) && parsed[0] && parsed[0].foods) {
           applyParsedMeals(parsed);
           return;
         }
       } catch(err) {}
     }
-    // Otherwise send to Claude AI for parsing
     await parseWithClaude(text);
   };
   reader.readAsText(file);
+}
+
+async function parseImageWithAI(b64, mime) {
+  setImportStatus('loading', '🤖 Reading diet plan from image...');
+  setImportPreview(null);
+  setImportApplyBtn(false);
+
+  const prompt = `This is a diet plan image. Extract ALL meals and return ONLY a JSON array with no explanation.
+
+Each meal object:
+{
+  "id": "breakfast",
+  "name": "🌅 Breakfast",
+  "emoji": "🌅",
+  "timeLabel": "9:00 AM",
+  "timeVal": "09:00",
+  "kcal": 950,
+  "protein": 33,
+  "carbs": 148,
+  "fat": 22,
+  "foods": [{ "name": "Oats", "qty": "100g", "cal": 370, "pro": 13 }]
+}
+
+Return ONLY the JSON array starting with [ and ending with ]`;
+
+  try {
+    const res = await fetch('https://blue-poetry-b2ac.vinayaknehwal98.workers.dev', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        model: 'openrouter/free',
+        max_tokens: 3000,
+        messages: [{
+          role: 'user',
+          content: [
+            { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
+            { type: 'text', text: prompt }
+          ]
+        }]
+      })
+    });
+
+    if (!res.ok) throw new Error('API ' + res.status);
+    const data = await res.json();
+    const raw = data.content?.find(b => b.type === 'text')?.text || '';
+    const cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
+    const match = cleaned.match(/\[[\s\S]*\]/);
+    if (!match) throw new Error('Could not find meal data in image');
+
+    const meals = JSON.parse(match[0]);
+    if (!Array.isArray(meals) || !meals.length) throw new Error('No meals found');
+
+    const fixed = meals.map((m, i) => ({
+      id: m.id || ('meal' + i),
+      name: m.name || ('Meal ' + (i+1)),
+      emoji: m.emoji || '🍽️',
+      timeLabel: m.timeLabel || fmt12(m.timeVal || '12:00'),
+      timeVal: m.timeVal || '12:00',
+      kcal: Number(m.kcal) || 0,
+      protein: Number(m.protein) || 0,
+      carbs: Number(m.carbs) || 0,
+      fat: Number(m.fat) || 0,
+      foods: (m.foods || []).map(f => ({
+        name: f.name || '',
+        qty: f.qty || '',
+        cal: Number(f.cal) || 0,
+        pro: Number(f.pro) || 0
+      }))
+    }));
+
+    importedMeals = fixed;
+    const totalKcal = fixed.reduce((a,m) => a + m.kcal, 0);
+    const totalPro  = fixed.reduce((a,m) => a + m.protein, 0);
+    setImportStatus('success', `✅ Found ${fixed.length} meals · ${totalKcal.toLocaleString()} kcal · ${totalPro}g protein`);
+    setImportPreview(fixed);
+    setImportApplyBtn(true);
+    document.getElementById('dropIcon').textContent = '✅';
+    document.getElementById('dropTitle').textContent = `${fixed.length} meals parsed from image`;
+    document.getElementById('dropSub').textContent = 'Review below and tap Apply Diet';
+
+  } catch(err) {
+    setImportStatus('error', '❌ Could not read image: ' + err.message);
+    setImportApplyBtn(false);
+  }
 }
 
 let pasteDebounce = null;
