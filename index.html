@@ -3786,8 +3786,8 @@ let aiHistory = [];
 
 function openAI() {
   document.getElementById('aiDrawer').classList.add('open');
-  if (aiHistory.length === 0) {
-    addAIMsg('assistant', `Hi! I'm your Diet Assistant 🤖\n\nI have full access to your app. I can:\n• Answer diet & nutrition questions\n• ✅ Check/uncheck meals\n• ✏️ Edit meal calories & foods\n• 📥 Import a new diet plan\n• 📸 Log extra meals\n• ⚖️ Update your weight\n• 💧 Log water\n• 🔄 Reset today\n\nWhat can I do for you?`);
+if (aiHistory.length === 0) {
+    addAIMsg('assistant', `Ready.`);
   }
   setTimeout(() => document.getElementById('aiInput').focus(), 300);
 }
@@ -3855,7 +3855,7 @@ Available actions:
 
 Meal IDs: breakfast, lunch, snack, preworkout, dinner
 
-Be friendly, concise, and helpful. Always explain what you did after performing an action.`;
+Be like Jarvis — calm, efficient, no small talk. Short responses only. Just do what's asked and confirm briefly. No emojis unless necessary.`;
 }
 
 async function sendAI() {
