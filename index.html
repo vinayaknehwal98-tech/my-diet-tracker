@@ -3636,9 +3636,9 @@ async function parseImageWithAI(b64, mime) {
   setImportPreview(null);
   setImportApplyBtn(false);
 
-  const prompt = `This is a diet plan image. Extract ALL meals and return ONLY a JSON array with no explanation.
+ const prompt = `This is a diet plan image. Extract ALL meals and return ONLY a JSON array with no explanation.
 
-Each meal object:
+Each meal object must have accurate calorie and protein values for each food item:
 {
   "id": "breakfast",
   "name": "🌅 Breakfast",
@@ -3649,10 +3649,18 @@ Each meal object:
   "protein": 33,
   "carbs": 148,
   "fat": 22,
-  "foods": [{ "name": "Oats", "qty": "100g", "cal": 370, "pro": 13 }]
+  "foods": [
+    { "name": "Oats", "qty": "100g", "cal": 370, "pro": 13 },
+    { "name": "Milk", "qty": "600ml", "cal": 390, "pro": 20 }
+  ]
 }
 
-Return ONLY the JSON array starting with [ and ending with ]`;
+IMPORTANT:
+- cal and pro fields must have real numeric values, never 0
+- Estimate calories from standard nutritional data if not shown in image
+- kcal = sum of all food cal values
+- protein = sum of all food pro values
+- Return ONLY the JSON array starting with [ and ending with ]`;
 
   try {
     const res = await fetch('https://blue-poetry-b2ac.vinayaknehwal98.workers.dev', {
