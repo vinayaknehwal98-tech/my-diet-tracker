@@ -3875,8 +3875,8 @@ async function sendAI() {
     const res = await fetch('https://blue-poetry-b2ac.vinayaknehwal98.workers.dev', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'openrouter/auto',
+     body: JSON.stringify({
+        model: 'openrouter/free',
         max_tokens: 1000,
         messages: [
           { role: 'user', content: getAppContext() },
