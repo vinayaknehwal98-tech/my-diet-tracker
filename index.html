@@ -3699,12 +3699,23 @@ IMPORTANT:
       protein: Number(m.protein) || 0,
       carbs: Number(m.carbs) || 0,
       fat: Number(m.fat) || 0,
-      foods: (m.foods || []).map(f => ({
-        name: f.name || '',
-        qty: f.qty || '',
-        cal: Number(f.cal) || 0,
-        pro: Number(f.pro) || 0
-      }))
+      foods: (() => {
+        const foods = (m.foods || []).map(f => ({
+          name: f.name || '',
+          qty: f.qty || '',
+          cal: Number(f.cal) || 0,
+          pro: Number(f.pro) || 0
+        }));
+        // If all foods have 0 cal, distribute meal total evenly
+        const totalFoodCal = foods.reduce((a,f) => a+f.cal, 0);
+        const totalFoodPro = foods.reduce((a,f) => a+f.pro, 0);
+        if (totalFoodCal === 0 && foods.length > 0) {
+          const perCal = Math.round((Number(m.kcal)||0) / foods.length);
+          const perPro = Math.round((Number(m.protein)||0) / foods.length);
+          return foods.map(f => ({ ...f, cal: perCal, pro: perPro }));
+        }
+        return foods;
+      })()
     }));
 
     importedMeals = fixed;
