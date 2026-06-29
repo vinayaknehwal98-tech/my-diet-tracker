@@ -1200,7 +1200,7 @@
   <div class="modal">
     <div class="modal-handle"></div>
     <div class="modal-title">📥 Import Diet Plan</div>
-    <div class="modal-sub">Upload a JSON file or paste your diet as plain text — Claude will parse it automatically.</div>
+    <div class="modal-sub">Upload a JSON, text file, or photo of your diet plan — AI will parse it automatically.</div>
 
     <div class="import-drop-zone" id="importDropZone"
       onclick="document.getElementById('importFileInput').click()"
@@ -1209,7 +1209,7 @@
       ondrop="handleImportDrop(event)">
       <div class="drop-icon" id="dropIcon">📄</div>
       <div class="drop-title" id="dropTitle">Tap to upload file</div>
-      <div class="drop-sub" id="dropSub">JSON diet file · plain text · diet description<br>Any format works — AI will convert it</div>
+      <div class="drop-sub" id="dropSub">JSON · plain text · or photo of diet plan<br>Any format works — AI will convert it</div>
     </div>
  <input type="file" id="importFileInput" accept=".json,.txt,.csv,image/*" style="display:none" onchange="handleImportFile(this)">
 
