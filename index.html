@@ -3038,9 +3038,12 @@ function scheduleMealReminders() {
 }
 
 function _scheduleInPageTimers() {
-  // Fallback: in-page timers (app must stay open)
   const now = new Date();
-  [15, 10, 5, 0].forEach(before => {
+  const rs = getRemindersState();
+  const remindBefore = rs.remindBefore || [15, 10, 5];
+  const alarmAtTime = rs.alarmAtTime !== false;
+  const beforeList = alarmAtTime ? [...remindBefore, 0] : remindBefore;
+  beforeList.forEach(before => {
     state.meals.forEach(meal => {
       const [h, m] = meal.timeVal.split(':').map(Number);
       const mealTime = new Date(); mealTime.setHours(h, m, 0, 0);
@@ -3135,12 +3138,35 @@ function renderReminders() {
           <span class="toggle-slider"></span>
         </label>
       </div>
-      <div style="background:var(--card);border-radius:8px;padding:8px 10px;margin-bottom:8px;">
-        <div style="font-size:11px;color:var(--muted);line-height:1.7;">
-          📣 Notification <b style="color:var(--text);">15 min</b> before &nbsp;→&nbsp; <b style="color:var(--text);">10 min</b> &nbsp;→&nbsp; <b style="color:var(--text);">5 min</b><br>
-          🔔 <b style="color:var(--accent);">Alarm rings</b> at meal time — won't stop until you tap <b>Done</b> or ✓ the meal
-        </div>
-      </div>
+     <div style="background:var(--card);border-radius:8px;padding:12px;margin-bottom:8px;">
+  <div style="font-size:11px;color:var(--muted);margin-bottom:10px;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Reminder Timing</div>
+  
+  <div style="margin-bottom:10px;">
+    <div style="font-size:11px;color:var(--muted);margin-bottom:6px;">Notify me before meal:</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;" id="reminderChips">
+      ${[5,10,15,20,30,45,60].map(min => {
+        const rs2 = getRemindersState();
+        const selected = (rs2.remindBefore || [15,10,5]).includes(min);
+        return `<button onclick="toggleReminderChip(${min})" id="chip_${min}" style="
+          padding:5px 10px;border-radius:20px;font-size:12px;cursor:pointer;
+          font-family:var(--font);border:1.5px solid ${selected ? '#6366f1' : 'var(--border)'};
+          background:${selected ? 'rgba(99,102,241,0.15)' : 'transparent'};
+          color:${selected ? '#818cf8' : 'var(--muted)'};
+          transition:all 0.15s;
+        ">${min}m</button>`;
+      }).join('')}
+    </div>
+  </div>
+
+  <div style="display:flex;align-items:center;justify-content:space-between;">
+    <div style="font-size:11px;color:var(--muted);">Alarm at meal time</div>
+    <label class="toggle-switch">
+      <input type="checkbox" id="toggleAlarmAtTime" ${(getRemindersState().alarmAtTime !== false) ? 'checked' : ''} onchange="toggleAlarmAtTime(this.checked)">
+      <span class="toggle-slider"></span>
+    </label>
+  </div>
+  <div style="font-size:10px;color:var(--muted);margin-top:4px;">🔔 Rings at exact meal time until you tap Done</div>
+</div>
       <div>${mealRows}</div>
     </div>
 
@@ -4103,6 +4129,42 @@ function executeAIAction(actionData) {
       if (tabIdx >= 0) switchTab(params.tab, tabBtns[tabIdx]);
       break;
   }
+}
+
+  function toggleReminderChip(min) {
+  const rs = getRemindersState();
+  if (!rs.remindBefore) rs.remindBefore = [15, 10, 5];
+  
+  const idx = rs.remindBefore.indexOf(min);
+  if (idx >= 0) {
+    rs.remindBefore.splice(idx, 1);
+  } else {
+    rs.remindBefore.push(min);
+    rs.remindBefore.sort((a,b) => b-a);
+  }
+  
+  saveRemindersState(rs);
+  
+  // Update chip UI
+  const chip = document.getElementById(`chip_${min}`);
+  if (chip) {
+    const selected = rs.remindBefore.includes(min);
+    chip.style.borderColor = selected ? '#6366f1' : 'var(--border)';
+    chip.style.background = selected ? 'rgba(99,102,241,0.15)' : 'transparent';
+    chip.style.color = selected ? '#818cf8' : 'var(--muted)';
+  }
+  
+  // Reschedule with new timing
+  if (rs.mealsOn) scheduleMealReminders();
+  showToast(rs.remindBefore.length ? `Reminders: ${rs.remindBefore.join(', ')}min before` : 'No pre-meal reminders');
+}
+
+function toggleAlarmAtTime(on) {
+  const rs = getRemindersState();
+  rs.alarmAtTime = on;
+  saveRemindersState(rs);
+  if (rs.mealsOn) scheduleMealReminders();
+  showToast(on ? '🔔 Alarm at meal time ON' : 'Alarm at meal time OFF');
 }
   
 </script>
