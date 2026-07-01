@@ -1280,34 +1280,27 @@ async function getFCMToken() {
   try {
     console.log("Starting FCM token generation...");
 
-    let reg = swReg;
+    const reg = await navigator.serviceWorker.ready;
+    console.log("Service Worker ready:", reg.active?.scriptURL);
 
-    if (!reg) {
-      reg = await navigator.serviceWorker.ready;
-    }
-
-    console.log("Service Worker:", reg);
-
-    const token = await getToken(messaging, {
+    const token = await messaging.getToken({
       vapidKey: VAPID_KEY,
       serviceWorkerRegistration: reg
     });
 
-    console.log("getToken() returned:", token);
+    console.log("FCM Token:", token);
 
     if (token) {
       localStorage.setItem("fcmToken", token);
-      console.log("Saved FCM token.");
-    } else {
-      console.warn("Firebase returned an empty token.");
+      return token;
     }
 
-    return token;
+    return null;
   } catch (err) {
     console.error("FCM TOKEN ERROR:", err);
+    return null;
   }
 }
-
 // Handle foreground messages
 messaging.onMessage((payload) => {
   console.log('Foreground message:', payload);
