@@ -14,7 +14,7 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-const CACHE_NAME = "bulk-diet-v5";
+const CACHE_NAME = "bulk-diet-v6";
 
 const STATIC = [
   "./",
@@ -46,12 +46,20 @@ self.addEventListener("activate", (event) => {
 
 // FETCH
 self.addEventListener("fetch", (event) => {
+  const url = new URL(event.request.url);
+
   if (event.request.method !== "GET") return;
+  if (url.protocol !== "http:" && url.protocol !== "https:") return;
+
   event.respondWith(
     fetch(event.request)
       .then((response) => {
-        const clone = response.clone();
-        caches.open(CACHE_NAME).then((cache) => cache.put(event.request, clone));
+        if (response && response.ok) {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => {
+            cache.put(event.request, clone).catch(() => {});
+          });
+        }
         return response;
       })
       .catch(() => caches.match(event.request))
