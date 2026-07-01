@@ -1278,29 +1278,34 @@ const VAPID_KEY = 'BGbfc2y9Uc1kmXHDp92z1Iat2ZpwPPjX9gvpg8QMr9UnMqrOF62hqJWcrz-VG
 
 async function getFCMToken() {
   try {
+    console.log("Starting FCM token generation...");
+
     let reg = swReg;
 
-    if (!reg && "serviceWorker" in navigator) {
+    if (!reg) {
       reg = await navigator.serviceWorker.ready;
     }
 
-    const token = await messaging.getToken({
+    console.log("Service Worker:", reg);
+
+    const token = await getToken(messaging, {
       vapidKey: VAPID_KEY,
       serviceWorkerRegistration: reg
     });
 
+    console.log("getToken() returned:", token);
+
     if (token) {
       localStorage.setItem("fcmToken", token);
-      console.log("FCM Token:", token);
-      return token;
+      console.log("Saved FCM token.");
+    } else {
+      console.warn("Firebase returned an empty token.");
     }
 
-    console.warn("No FCM token returned");
+    return token;
   } catch (err) {
-    console.error("FCM token error:", err);
+    console.error("FCM TOKEN ERROR:", err);
   }
-
-  return null;
 }
 
 // Handle foreground messages
