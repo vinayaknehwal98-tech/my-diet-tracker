@@ -1,7 +1,7 @@
 // Bulk Diet Tracker — Service Worker
 
-importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js');
-importScripts('https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js');
+importScripts("https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js");
+importScripts("https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js");
 
 firebase.initializeApp({
   apiKey: "AIzaSyDuc449HUPShaU5wBP9CFDU_eREh8n0gsU",
@@ -14,7 +14,7 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-const CACHE_NAME = "bulk-diet-v6";
+const CACHE_NAME = "bulk-diet-v7";
 
 const STATIC = [
   "./",
@@ -24,7 +24,6 @@ const STATIC = [
   "./icon-512.png"
 ];
 
-// INSTALL
 self.addEventListener("install", (event) => {
   self.skipWaiting();
   event.waitUntil(
@@ -32,19 +31,19 @@ self.addEventListener("install", (event) => {
   );
 });
 
-// ACTIVATE
 self.addEventListener("activate", (event) => {
   event.waitUntil(
     caches.keys().then((keys) =>
       Promise.all(
-        keys.filter((key) => key !== CACHE_NAME).map((key) => caches.delete(key))
+        keys
+          .filter((key) => key !== CACHE_NAME)
+          .map((key) => caches.delete(key))
       )
     )
   );
   self.clients.claim();
 });
 
-// FETCH
 self.addEventListener("fetch", (event) => {
   const url = new URL(event.request.url);
 
@@ -66,63 +65,100 @@ self.addEventListener("fetch", (event) => {
   );
 });
 
-// BACKGROUND PUSH NOTIFICATION
 messaging.onBackgroundMessage((payload) => {
-  const { title, body, mealId, type } = payload.data || {};
-  
+  const data = payload.data || {};
+
+  const title =
+    data.title ||
+    payload.notification?.title ||
+    "🍽️ Meal Time!";
+
+  const body =
+    data.body ||
+    payload.notification?.body ||
+    "Time for your meal!";
+
+  const mealId = data.mealId;
+
   const options = {
-    body: body || 'Time for your meal!',
-    icon: './icon-192.png',
-    badge: './icon-192.png',
-    tag: mealId ? `meal-${mealId}` : 'diet-reminder',
-    data: payload.data,
-    actions: mealId ? [
-      { action: 'done', title: '✅ Done' },
-      { action: 'snooze', title: '⏰ Snooze 5m' }
-    ] : []
+    body,
+    icon: "https://vinayaknehwal98-tech.github.io/my-diet-tracker/icon-192.png",
+    badge: "https://vinayaknehwal98-tech.github.io/my-diet-tracker/icon-192.png",
+    tag: mealId ? `meal-${mealId}` : "diet-reminder",
+    data,
+    requireInteraction: !!mealId,
+    actions: mealId
+      ? [
+          { action: "done", title: "✅ Done" },
+          { action: "snooze", title: "⏰ Snooze 5m" }
+        ]
+      : []
   };
 
-  return self.registration.showNotification(title || '🍽️ Meal Time!', options);
+  return self.registration.showNotification(title, options);
 });
 
-// NOTIFICATION CLICK
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
+
   const data = event.notification.data || {};
+  const mealId = data.mealId;
   const action = event.action;
 
-  if (action === 'done' && data.mealId) {
+  if (action === "done" && mealId) {
     event.waitUntil(
-      self.clients.matchAll({ type: "window" }).then((clients) => {
-        if (clients.length > 0) {
-          clients[0].focus();
-          clients[0].postMessage({ type: 'MEAL_DONE_FROM_NOTIF', mealId: data.mealId });
-        } else {
-          self.clients.openWindow('./?action=done&mealId=' + data.mealId);
-        }
+      self.clients.matchAll({ type: "window", includeUncontrolled: true })
+        .then((clients) => {
+          if (clients.length > 0) {
+            clients[0].focus();
+            clients[0].postMessage({
+              type: "MEAL_DONE_FROM_NOTIF",
+              mealId
+            });
+          } else {
+            self.clients.openWindow(`./?action=done&mealId=${mealId}`);
+          }
+        })
+    );
+    return;
+  }
+
+  if (action === "snooze" && mealId) {
+    event.waitUntil(
+      self.registration.showNotification("⏰ Snoozed", {
+        body: "Open the app to continue the alarm.",
+        icon: "https://vinayaknehwal98-tech.github.io/my-diet-tracker/icon-192.png",
+        badge: "https://vinayaknehwal98-tech.github.io/my-diet-tracker/icon-192.png",
+        tag: `meal-${mealId}`,
+        data
       })
     );
-  } else if (action === 'snooze') {
-    // Snooze — re-show after 5 min
-    setTimeout(() => {
-      self.registration.showNotification(event.notification.title, {
-        ...event.notification,
-        body: '(Snoozed) ' + event.notification.body
-      });
-    }, 5 * 60 * 1000);
-  } else {
+    return;
+  }
+
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true })
+      .then((clients) => {
+        if (clients.length > 0) {
+          clients[0].focus();
+        } else {
+          self.clients.openWindow("./");
+        }
+      })
+  );
+});
+
+self.addEventListener("message", (event) => {
+  const msg = event.data;
+  if (!msg) return;
+
+  if (msg.type === "STOP_ALARM" && msg.mealId) {
     event.waitUntil(
-      self.clients.matchAll({ type: "window" }).then((clients) => {
-        if (clients.length > 0) clients[0].focus();
-        else self.clients.openWindow("./");
+      self.registration.getNotifications({
+        tag: `meal-${msg.mealId}`
+      }).then((notifications) => {
+        notifications.forEach((n) => n.close());
       })
     );
   }
 });
-
-// MESSAGE EVENTS
-self.addEventListener("message", (event) => {
-  const msg = event.data;
-  if (!msg) return;
-  if (msg.type === "STOP_ALARM") {
-    self.registration.getNotifications({ tag: `meal-alarm-${msg.mealId}` })
