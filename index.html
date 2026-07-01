@@ -1278,15 +1278,28 @@ const VAPID_KEY = 'BGbfc2y9Uc1kmXHDp92z1Iat2ZpwPPjX9gvpg8QMr9UnMqrOF62hqJWcrz-VG
 
 async function getFCMToken() {
   try {
-    const token = await messaging.getToken({ vapidKey: VAPID_KEY });
+    let reg = swReg;
+
+    if (!reg && "serviceWorker" in navigator) {
+      reg = await navigator.serviceWorker.ready;
+    }
+
+    const token = await messaging.getToken({
+      vapidKey: VAPID_KEY,
+      serviceWorkerRegistration: reg
+    });
+
     if (token) {
-      localStorage.setItem('fcmToken', token);
-      console.log('FCM Token:', token);
+      localStorage.setItem("fcmToken", token);
+      console.log("FCM Token:", token);
       return token;
     }
-  } catch(err) {
-    console.warn('FCM token error:', err);
+
+    console.warn("No FCM token returned");
+  } catch (err) {
+    console.error("FCM token error:", err);
   }
+
   return null;
 }
 
