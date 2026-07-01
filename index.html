@@ -1793,7 +1793,18 @@ function renderAll() {
 
 
 function updateMacros() {
-  const TOTAL = { kcal: 3320, pro: 149, carbs: 415, fat: 72 };
+  const TOTAL = {
+  kcal: state.meals.reduce((a,m) => a + m.kcal, 0) || 3320,
+  pro: state.meals.reduce((a,m) => a + m.protein, 0) || 149,
+  carbs: state.meals.reduce((a,m) => a + (m.carbs||0), 0) || 415,
+  fat: state.meals.reduce((a,m) => a + (m.fat||0), 0) || 72
+};
+
+document.querySelector('#macroKcal').closest('.macro-item').querySelector('.total-lbl').textContent = `/ ${TOTAL.kcal.toLocaleString()}`;
+  document.querySelector('#macroPro').closest('.macro-item').querySelector('.total-lbl').textContent = `/ ${TOTAL.pro}g`;
+  document.querySelector('#macroCarbs').closest('.macro-item').querySelector('.total-lbl').textContent = `/ ${TOTAL.carbs}g`;
+  document.querySelector('#macroFat').closest('.macro-item').querySelector('.total-lbl').textContent = `/ ${TOTAL.fat}g`;
+  
   const doneMeals = state.meals.filter(m => isMealDone(m.id));
   const extras = (state.extraMeals || []).filter(e => e.date === todayKey());
   const kcal  = doneMeals.reduce((a,m) => a + m.kcal, 0)    + extras.reduce((a,e) => a + e.kcal, 0);
@@ -1877,7 +1888,7 @@ const remainingWeight = Math.max(
       </div>
       <div class="day-info">
         <h2>${doneMeals === totalMeals ? '🎉 All meals done!' : doneMeals === 0 ? 'EARN IT' : `${totalMeals - doneMeals} meal${totalMeals - doneMeals > 1 ? 's' : ''} left`}</h2>
-        <p>Target: 3,320 kcal · 149g protein<br>Just Stay Fuckin Consistent</p>
+        <p>Target: ${state.meals.reduce((a,m)=>a+m.kcal,0).toLocaleString()} kcal · ${state.meals.reduce((a,m)=>a+m.protein,0)}g protein<br>Just Stay Fuckin Consistent</p>
       </div>
     </div>
   `;
@@ -2295,10 +2306,9 @@ html += `
     font-size: 13px;
     margin-bottom: 10px;
   ">
-    Calories Left: ${3320 - doneKcal}
-    •
-    Protein Left: ${
-      149 -
+   Calories Left: ${state.meals.reduce((a,m)=>a+m.kcal,0) - doneKcal}
+- Protein Left: ${
+  state.meals.reduce((a,m)=>a+m.protein,0) -
       state.meals
         .filter(m => isMealDone(m.id))
         .reduce((a,m)=>a+m.protein,0)
