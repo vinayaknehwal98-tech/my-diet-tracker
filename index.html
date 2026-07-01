@@ -1,6 +1,9 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
+  <!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.7.1/firebase-messaging-compat.js"></script>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="theme-color" content="#050505">
@@ -1260,6 +1263,41 @@
 <div class="toast" id="toast"></div>
 
 <script>
+// --- FIREBASE ---
+firebase.initializeApp({
+  apiKey: "AIzaSyDuc449HUPShaU5wBP9CFDU_eREh8n0gsU",
+  authDomain: "diet-tracker-5142c.firebaseapp.com",
+  projectId: "diet-tracker-5142c",
+  storageBucket: "diet-tracker-5142c.firebasestorage.app",
+  messagingSenderId: "737243616902",
+  appId: "1:737243616902:web:e0c5ddc889f16ec09f6307"
+});
+
+const messaging = firebase.messaging();
+const VAPID_KEY = 'BGbfc2y9Uc1kmXHDp92z1Iat2ZpwPPjX9gvpg8QMr9UnMqrOF62hqJWcrz-VGA2nhTDN9VLTn4Abon7-IOpt7Qs';
+
+async function getFCMToken() {
+  try {
+    const token = await messaging.getToken({ vapidKey: VAPID_KEY });
+    if (token) {
+      localStorage.setItem('fcmToken', token);
+      console.log('FCM Token:', token);
+      return token;
+    }
+  } catch(err) {
+    console.warn('FCM token error:', err);
+  }
+  return null;
+}
+
+// Handle foreground messages
+messaging.onMessage((payload) => {
+  console.log('Foreground message:', payload);
+  const { title, body, mealId } = payload.data || {};
+  if (mealId) startAudioAlarm(mealId);
+  else showToast(title || '🔔 Reminder');
+});
+  
 // --- STATE ---
 const DAYS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 const today = new Date();
@@ -2984,9 +3022,13 @@ function doneAlarm(mealId) {
 // --- NOTIFICATIONS ---
 async function requestNotifPermission() {
   if (!NOTIF_SUPPORTED) return false;
-  if (Notification.permission === 'granted') return true;
+  if (Notification.permission === 'granted') {
+    await getFCMToken();
+    return true;
+  }
   const result = await Notification.requestPermission();
   notifPermission = result;
+  if (result === 'granted') await getFCMToken();
   return result === 'granted';
 }
 
