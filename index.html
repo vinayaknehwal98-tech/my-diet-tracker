@@ -1280,18 +1280,11 @@ async function getFCMToken() {
   try {
     console.log("Starting FCM token generation...");
 
-    const reg = await navigator.serviceWorker.register("./sw.js", {
+    const reg = await navigator.serviceWorker.register("./firebase-messaging-sw.js", {
       scope: "./"
     });
 
-    await navigator.serviceWorker.ready;
-
-    console.log("Using SW:", reg);
-    console.log("PushManager:", reg.pushManager);
-
-    if (!reg.pushManager) {
-      throw new Error("PushManager not available on this Service Worker registration");
-    }
+    console.log("Using Firebase Messaging SW:", reg);
 
     const token = await firebase.messaging().getToken({
       vapidKey: VAPID_KEY,
@@ -1300,14 +1293,17 @@ async function getFCMToken() {
 
     console.log("FCM Token:", token);
 
-    if (token) localStorage.setItem("fcmToken", token);
+    if (token) {
+      localStorage.setItem("fcmToken", token);
+    }
 
     return token;
   } catch (err) {
     console.error("FCM TOKEN ERROR:", err);
     return null;
   }
-}  
+}
+  
 // Handle foreground messages
 messaging.onMessage((payload) => {
   console.log('Foreground message:', payload);
