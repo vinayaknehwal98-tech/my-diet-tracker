@@ -1,5 +1,5 @@
-importScripts("https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js");
-importScripts("https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js");
+importScripts('https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js');
+importScripts('https://www.gstatic.com/firebasejs/8.10.1/firebase-messaging.js');
 
 firebase.initializeApp({
   apiKey: "AIzaSyDuc449HUPShaU5wBP9CFDU_eREh8n0gsU",
@@ -12,23 +12,17 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-messaging.setBackgroundMessageHandler((payload) => {
-  const data = payload.data || {};
-
-  const title =
-    data.title ||
-    payload.notification?.title ||
-    "🍽️ Meal Time!";
-
-  const options = {
-    body:
-      data.body ||
-      payload.notification?.body ||
-      "Time for your meal!",
-    icon: "https://vinayaknehwal98-tech.github.io/my-diet-tracker/icon-192.png",
-    badge: "https://vinayaknehwal98-tech.github.io/my-diet-tracker/icon-192.png",
-    data
-  };
-
-  return self.registration.showNotification(title, options);
+messaging.onBackgroundMessage((payload) => {
+  const { title, body, mealId } = payload.data || {};
+  self.registration.showNotification(title || '🍽️ Meal Time!', {
+    body: body || 'Time for your meal!',
+    icon: './icon-192.png',
+    badge: './icon-192.png',
+    tag: mealId ? `meal-${mealId}` : 'diet-reminder',
+    data: payload.data,
+    actions: mealId ? [
+      { action: 'done', title: '✅ Done' },
+      { action: 'snooze', title: '⏰ Snooze 5m' }
+    ] : []
+  });
 });
