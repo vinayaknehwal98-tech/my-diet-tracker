@@ -1304,6 +1304,38 @@ async function getFCMToken() {
     return null;
   }
 }
+
+  async function syncScheduleToCloudflare() {
+  try {
+    const token = localStorage.getItem("fcmToken") || await getFCMToken();
+    if (!token) {
+      console.warn("No FCM token found. Schedule not synced.");
+      return;
+    }
+
+    const rs = getRemindersState();
+
+    const res = await fetch("https://diet-push.vinayaknehwal98.workers.dev/schedule", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        token,
+        meals: state.meals,
+        remindBefore: rs.remindBefore || [15, 10, 5],
+        alarmAtTime: rs.alarmAtTime !== false,
+        timezone: "Asia/Kolkata"
+      })
+    });
+
+    const data = await res.json();
+    console.log("Cloudflare schedule sync:", data);
+    return data;
+  } catch (err) {
+    console.error("Cloudflare schedule sync failed:", err);
+  }
+}
   
 // Handle foreground messages
 messaging.onMessage((payload) => {
@@ -2629,6 +2661,7 @@ function saveModal() {
   };
 
   saveState();
+  syncScheduleToCloudflare();
   closeModal();
   showToast('✅ Meal updated!');
   renderAll();
@@ -3262,7 +3295,8 @@ async function handleEnableNotif() {
     const rs = getRemindersState();
     rs.mealsOn = true;
     rs.waterOn = true;
-    saveRemindersState(rs);
+   saveRemindersState(rs);
+await syncScheduleToCloudflare();
 
     if (navigator.serviceWorker) {
       navigator.serviceWorker.ready.then(() => {
@@ -3281,30 +3315,41 @@ async function handleEnableNotif() {
   }
 }
 
-function handleMealToggle(on) {
+async function handleMealToggle(on) {
   const rs = getRemindersState();
   rs.mealsOn = on;
   saveRemindersState(rs);
+
+  await syncScheduleToCloudflare();
+
   if (on) scheduleMealReminders();
   else clearMealTimers();
+
   renderAll();
   showToast(on ? '🍽️ Meal reminders ON' : 'Meal reminders off');
 }
 
-function handleWaterToggle(on) {
+async function handleWaterToggle(on) {
   const rs = getRemindersState();
   rs.waterOn = on;
   saveRemindersState(rs);
+
+  await syncScheduleToCloudflare();
+
   if (on) startWaterReminders(rs.waterInterval);
   else clearWaterTimer();
+
   renderAll();
   showToast(on ? '💧 Water reminders ON' : 'Water reminders off');
 }
 
-function handleWaterInterval(val) {
+async function handleWaterInterval(val) {
   const rs = getRemindersState();
   rs.waterInterval = parseInt(val);
   saveRemindersState(rs);
+
+  await syncScheduleToCloudflare();
+
   document.getElementById('waterIntervalLabel').textContent = val + ' min';
   if (rs.waterOn) startWaterReminders(rs.waterInterval);
 }
