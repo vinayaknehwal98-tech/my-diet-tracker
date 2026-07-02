@@ -3156,7 +3156,12 @@ function startWaterReminders(intervalMin) {
 // --- REMINDERS STATE ---
 function getRemindersState() {
   try { const r = localStorage.getItem('bulkDiet_reminders'); if (r) return JSON.parse(r); } catch(e) {}
-  return { mealsOn: false, waterOn: false, waterInterval: 60 };
+  return {
+  mealsOn: false,
+  waterOn: false,
+  waterInterval: 60,
+  waterGoalGlasses: 8
+};
 }
 
 function saveRemindersState(rs) {
@@ -3375,11 +3380,12 @@ if (next >= 8) showToast(`🎉 Water goal hit! ${(next * 0.25).toFixed(1)} L don
 
 function updateWaterUI() {
   const count = getWaterCount();
+  const goal = getRemindersState().waterGoalGlasses || 8;
   const container = document.getElementById('waterGlasses');
   const statusEl = document.getElementById('waterStatus');
   if (!container) return;
   let html = '';
-  for (let i = 0; i < 8; i++) {
+  for (let i = 0; i < goal; i++) {
     html += `<div onclick="logWater(${i < count ? -1 : 1})" style="
       width:28px;height:28px;border-radius:6px;
       background:${i < count ? 'var(--accent2)' : 'var(--card)'};
@@ -3390,7 +3396,7 @@ function updateWaterUI() {
   }
   container.innerHTML = html;
   const liters = (count * 0.25).toFixed(2).replace(/\.?0+$/, '');
-  statusEl.textContent = `${count} / 8 glasses · ${liters} L`;
+  statusEl.textContent = `${count} / ${goal} glasses · ${liters} L`;
 }
 
 // Re-run updateWaterUI after renderAll when on reminders tab
