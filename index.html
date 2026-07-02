@@ -3370,7 +3370,7 @@ function logWater(delta) {
   const next = Math.max(0, Math.min(12, cur + delta));
   localStorage.setItem(todayWaterKey(), next);
   updateWaterUI();
-  if (next >= 8) showToast('🎉 Water goal hit! 3+ L done');
+if (next >= 8) showToast(`🎉 Water goal hit! ${(next * 0.25).toFixed(1)} L done`);
 }
 
 function updateWaterUI() {
