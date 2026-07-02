@@ -3259,6 +3259,12 @@ function renderReminders() {
         <div>
           <div style="font-family:var(--font);font-size:14px;font-weight:600;">💧 Water Reminders</div>
           <div style="font-size:11px;color:var(--muted);margin-top:2px;">Stay hydrated — 3–4 L daily</div>
+          <div style="display:flex;align-items:center;gap:8px;margin-top:8px;">
+  <span style="font-size:11px;color:var(--muted);">Goal boxes:</span>
+  <input type="number" min="1" max="20" value="${rs.waterGoalGlasses || 8}"
+    onchange="setWaterGoal(this.value)"
+    style="width:60px;background:var(--card);border:1px solid var(--border);color:var(--text);border-radius:6px;padding:4px 6px;font-size:12px;">
+</div>
         </div>
         <label class="toggle-switch">
           <input type="checkbox" id="toggleWater" ${rs.waterOn ? 'checked' : ''} onchange="handleWaterToggle(this.checked)" ${!permGranted ? 'disabled' : ''}>
@@ -3372,12 +3378,16 @@ function getWaterCount() {
 
 function logWater(delta) {
   const cur = getWaterCount();
-  const next = Math.max(0, Math.min(12, cur + delta));
+  const goal = getRemindersState().waterGoalGlasses || 8;
+  const next = Math.max(0, Math.min(goal, cur + delta));
+
   localStorage.setItem(todayWaterKey(), next);
   updateWaterUI();
-if (next >= 8) showToast(`🎉 Water goal hit! ${(next * 0.25).toFixed(1)} L done`);
-}
 
+  if (next >= goal) {
+    showToast(`🎉 Water goal hit! ${(next * 0.25).toFixed(1)} L done`);
+  }
+}
 function updateWaterUI() {
   const count = getWaterCount();
   const goal = getRemindersState().waterGoalGlasses || 8;
