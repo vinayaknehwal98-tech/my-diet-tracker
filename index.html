@@ -3115,6 +3115,9 @@ function _scheduleInPageTimers() {
   });
 }
 
+  _scheduleInPageTimers();
+  schedulePushReminders();
+  
 // --- WATER REMINDER SCHEDULER ---
 let waterTimer = null;
 const WATER_INTERVAL_MIN = 60;
@@ -3268,6 +3271,10 @@ function handleEnableNotif() {
   requestNotifPermission().then(granted => {
     if (granted) {
       const rs = getRemindersState();
+      if (granted) {
+      await getFCMToken();
+      const rs = getRemindersState();
+      rs.mealsOn = true; rs.waterOn = true;
       rs.mealsOn = true; rs.waterOn = true;
       saveRemindersState(rs);
       // Wait for SW to be ready then schedule
@@ -3986,6 +3993,67 @@ function applyImport() {
   showToast(`✅ Diet updated! ${importedMeals.length} meals loaded.`);
 }
 
+// --- PUSH NOTIFICATIONS ---
+const PUSH_WORKER_URL = 'https://diet-push.vinayaknehwal98.workers.dev';
+
+async function sendPushNotification(title, body, data = {}) {
+  const token = localStorage.getItem('fcmToken');
+  if (!token) return;
+  try {
+    await fetch(PUSH_WORKER_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token, title, body, data })
+    });
+  } catch(err) {
+    console.warn('Push failed:', err);
+  }
+}
+
+async function schedulePushReminders() {
+  const token = localStorage.getItem('fcmToken');
+  if (!token) return;
+  const rs = getRemindersState();
+  const remindBefore = rs.remindBefore || [15, 10, 5];
+  const alarmAtTime = rs.alarmAtTime !== false;
+  const now = new Date();
+
+  state.meals.forEach(meal => {
+    const [h, m] = meal.timeVal.split(':').map(Number);
+
+    remindBefore.forEach(before => {
+      const mealTime = new Date();
+      mealTime.setHours(h, m - before, 0, 0);
+      const diff = mealTime - now;
+      if (diff <= 0) return;
+      setTimeout(async () => {
+        if (isMealDone(meal.id)) return;
+        await sendPushNotification(
+          `⏰ ${meal.name.replace(/^[^\w\s]*\s*/, '')} in ${before} min`,
+          `${meal.timeLabel} · ${meal.kcal} kcal`,
+          { mealId: meal.id, type: 'reminder' }
+        );
+      }, diff);
+    });
+
+    if (alarmAtTime) {
+      const mealTime = new Date();
+      mealTime.setHours(h, m, 0, 0);
+      const diff = mealTime - now;
+      if (diff <= 0) return;
+      setTimeout(async () => {
+        if (isMealDone(meal.id)) return;
+        await sendPushNotification(
+          `🔔 ${meal.name.replace(/^[^\w\s]*\s*/, '')} Time!`,
+          `${meal.timeLabel} · Tap Done when finished`,
+          { mealId: meal.id, type: 'alarm' }
+        );
+        startAudioAlarm(meal.id);
+      }, diff);
+    }
+  });
+}
+  
 // --- AI ASSISTANT ---
 let aiHistory = [];
 
