@@ -3076,20 +3076,8 @@ function clearMealTimers() {
 
 function scheduleMealReminders() {
   clearMealTimers();
-  if (!NOTIF_SUPPORTED || Notification.permission !== 'granted') return;
-  const rs = getRemindersState();
 
-  // Prefer SW (works in background) — wait for ready instead of checking controller
-  if ('serviceWorker' in navigator) {
-    navigator.serviceWorker.ready.then(reg => {
-      if (reg.active) {
-        sendToSW({ type: 'SCHEDULE_MEALS', meals: state.meals, waterOn: rs.waterOn, waterInterval: rs.waterInterval });
-        return;
-      }
-      _scheduleInPageTimers();
-    }).catch(() => _scheduleInPageTimers());
-    return;
-  }
+  if (!NOTIF_SUPPORTED || Notification.permission !== 'granted') return;
 
   _scheduleInPageTimers();
 }
