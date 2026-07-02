@@ -3267,30 +3267,32 @@ function renderReminders() {
     </div>`;
 }
 
-function handleEnableNotif() {
-  requestNotifPermission().then(granted => {
-    if (granted) {
-      const rs = getRemindersState();
-      if (granted) {
-      await getFCMToken();
-      const rs = getRemindersState();
-      rs.mealsOn = true; rs.waterOn = true;
-      rs.mealsOn = true; rs.waterOn = true;
-      saveRemindersState(rs);
-      // Wait for SW to be ready then schedule
-      if (navigator.serviceWorker) {
-        navigator.serviceWorker.ready.then(() => {
-          scheduleMealReminders();
-          startWaterReminders(rs.waterInterval);
-        });
-      } else {
+async function handleEnableNotif() {
+  const granted = await requestNotifPermission();
+
+  if (granted) {
+    await getFCMToken();
+
+    const rs = getRemindersState();
+    rs.mealsOn = true;
+    rs.waterOn = true;
+    saveRemindersState(rs);
+
+    if (navigator.serviceWorker) {
+      navigator.serviceWorker.ready.then(() => {
         scheduleMealReminders();
         startWaterReminders(rs.waterInterval);
-      }
-      renderAll();
-      showToast('🔔 Alarms enabled!');
-    } else { renderAll(); }
-  });
+      });
+    } else {
+      scheduleMealReminders();
+      startWaterReminders(rs.waterInterval);
+    }
+
+    renderAll();
+    showToast('🔔 Alarms enabled!');
+  } else {
+    renderAll();
+  }
 }
 
 function handleMealToggle(on) {
