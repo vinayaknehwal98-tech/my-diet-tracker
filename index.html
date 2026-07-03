@@ -4132,9 +4132,16 @@ let aiHistory = [];
 
 function openAI() {
   document.getElementById('aiDrawer').classList.add('open');
-if (aiHistory.length === 0 && !document.querySelector('.ai-msg.assistant')) {
-   addAIMsg('assistant', 'Report your progress.\nWhat did you screw up today?');
+
+  const messages = document.getElementById('aiMessages');
+
+  if (!messages.hasChildNodes()) {
+    addAIMsg(
+      'assistant',
+      'Report your progress.\nWhat did you screw up today?'
+    );
   }
+
   setTimeout(() => document.getElementById('aiInput').focus(), 300);
 }
 
