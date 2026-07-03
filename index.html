@@ -3374,29 +3374,9 @@ async function handleWaterInterval(val) {
   document.getElementById('waterIntervalLabel').textContent = val + ' min';
   if (rs.waterOn) startWaterReminders(rs.waterInterval);
 }
-
-function sendTestWater() {
-  sendNotif('💧 Water Reminder', 'Drink a glass of water! Target: 3–4 L daily 🥤');
-}
-
-  function setWaterGoal(val) {
-  const rs = getRemindersState();
-
-  const goal = Math.max(1, Math.min(20, parseInt(val) || 8));
-
-  rs.waterGoalGlasses = goal;
-  saveRemindersState(rs);
-
-  // Prevent current water count from exceeding the new goal
-  const current = Math.min(getWaterCount(), goal);
-  localStorage.setItem(todayWaterKey(), current);
-
-  updateWaterUI();
-
-  showToast(`💧 Water goal updated to ${goal} glasses`);
-}
 function setWaterGoal(val) {
   const rs = getRemindersState();
+
   const goal = Math.max(1, Math.min(20, parseInt(val) || 8));
 
   rs.waterGoalGlasses = goal;
@@ -3404,6 +3384,10 @@ function setWaterGoal(val) {
 
   const current = Math.min(getWaterCount(), goal);
   localStorage.setItem(todayWaterKey(), current);
+
+  // Update the number beside Goal
+  const label = document.getElementById("waterGoalLabel");
+  if (label) label.textContent = goal;
 
   updateWaterUI();
 
