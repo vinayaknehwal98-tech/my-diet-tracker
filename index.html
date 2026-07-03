@@ -4133,7 +4133,7 @@ let aiHistory = [];
 function openAI() {
   document.getElementById('aiDrawer').classList.add('open');
 if (aiHistory.length === 0) {
-    addAIMsg('assistant', `Hii SIR, How may I help you today?`);
+    addAIMsg('assistant', 'Report your progress.<br>What did you screw up today?');
   }
   setTimeout(() => document.getElementById('aiInput').focus(), 300);
 }
