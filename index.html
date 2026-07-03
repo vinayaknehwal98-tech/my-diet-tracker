@@ -4132,7 +4132,7 @@ let aiHistory = [];
 
 function openAI() {
   document.getElementById('aiDrawer').classList.add('open');
-if (aiHistory.length === 0) {
+if (aiHistory.length === 0 && !document.querySelector('.ai-msg.assistant')) {
    addAIMsg('assistant', 'Report your progress.\nWhat did you screw up today?');
   }
   setTimeout(() => document.getElementById('aiInput').focus(), 300);
@@ -4151,6 +4151,7 @@ function addAIMsg(role, text) {
   const div = document.createElement('div');
   div.className = `ai-msg ${role}`;
   div.textContent = text;
+div.style.whiteSpace = "pre-line";
 div.style.whiteSpace = "pre-line";
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
