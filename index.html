@@ -4281,7 +4281,7 @@ let displayText =
       } catch(e) {}
     }
 
-    addAIMsg('assistant', displayText || 'Done!');
+   addAIMsg('assistant', displayText || 'Action completed. Stay locked in.');
     aiHistory.push({ role: 'assistant', content: raw });
 
     // Keep history manageable
