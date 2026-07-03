@@ -4151,6 +4151,7 @@ function addAIMsg(role, text) {
   const div = document.createElement('div');
   div.className = `ai-msg ${role}`;
   div.textContent = text;
+div.style.whiteSpace = "pre-line";
   el.appendChild(div);
   el.scrollTop = el.scrollHeight;
   return div;
