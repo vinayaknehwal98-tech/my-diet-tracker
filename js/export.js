@@ -7,14 +7,9 @@ function renderExport() {
   const totalPossible = daysWithData * state.meals.length;
   const consistency = totalPossible > 0 ? Math.round((totalChecked / totalPossible) * 100) : 0;
 
-  // Water data
-  const waterEntries = [];
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (key && key.startsWith('water_')) {
-      waterEntries.push({ date: key.replace('water_', ''), glasses: parseInt(localStorage.getItem(key) || 0) });
-    }
-  }
+  const todayWaterGlasses = typeof todayWaterKey === 'function'
+    ? parseInt(localStorage.getItem(todayWaterKey()) || 0)
+    : 0;
 
   return `
     <div style="padding-bottom:10px;">
@@ -36,8 +31,8 @@ function renderExport() {
             <div style="font-size:10px;color:var(--muted);margin-top:2px;">Meals Completed</div>
           </div>
           <div style="background:var(--card);border-radius:10px;padding:10px;">
-            <div style="font-family:var(--font);font-size:20px;font-weight:700;color:var(--yellow);">${waterEntries.reduce((a,w)=>a+w.glasses,0)}</div>
-            <div style="font-size:10px;color:var(--muted);margin-top:2px;">Total Glasses 💧</div>
+            <div style="font-family:var(--font);font-size:20px;font-weight:700;color:var(--yellow);">${todayWaterGlasses}</div>
+            <div style="font-size:10px;color:var(--muted);margin-top:2px;">Today Glasses 💧</div>
           </div>
         </div>
       </div>

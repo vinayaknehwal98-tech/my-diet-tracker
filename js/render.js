@@ -2,6 +2,9 @@
 let activeTab = 'today';
 
 function switchTab(tab, btn) {
+  if (activeTab === 'workout' && typeof flushWorkoutAutosave === 'function') {
+    flushWorkoutAutosave();
+  }
   activeTab = tab;
   document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
   btn.classList.add('active');
