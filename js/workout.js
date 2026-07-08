@@ -238,6 +238,8 @@ function renderWorkout() {
       ${renderWorkoutInsightCards(status, review)}
     </div>
 
+    ${renderXCoachMemoryPanel()}
+
     <form class="workout-list" onsubmit="event.preventDefault(); saveWorkoutLog();">
       ${workout.exercises.map((exercise, index) => renderWorkoutExercise(exercise, index)).join('')}
       <button class="btn-save workout-save" type="submit">Save Workout</button>
@@ -246,13 +248,22 @@ function renderWorkout() {
 
 function renderWorkoutInsightCards(status, review) {
   const priority = getPriorityLift(status.workout);
-  const stronger = status.volumeDelta > 0 ? 'Volume is up from last time.' : 'Beat last total volume to light this up.';
+  const target = priority ? getProgressiveOverloadSuggestion(priority, getExerciseHistory(priority.id)) : null;
   const recovery = getWorkoutRecoveryWarning();
+  const memory = inferUserPatterns();
+  const lastComparison = status.lastWorkoutVolume
+    ? status.volumeDelta > 0
+      ? `Up ${Math.round(status.volumeDelta)} volume from last session.`
+      : status.volumeDelta < 0
+        ? `Down ${Math.abs(Math.round(status.volumeDelta))} volume from last session.`
+        : 'Matched last session volume.'
+    : 'Need a previous session for comparison.';
   return [
-    ['Stronger Than Last Time', stronger],
-    ['Priority Lift', priority ? priority.name : 'No priority lift today.'],
-    ['Recovery Warning', recovery],
-    ['Consistency', `${review.sessionsCompleted}/${review.trainingDays} sessions completed this week.`]
+    ["Today's Overload Target", target ? `${target.status}: ${target.nextTarget}` : 'No training target today.'],
+    ['Recovery Status', recovery],
+    ['Risk Warning', memory.painFlags[0] || 'No repeated pain pattern logged.'],
+    ['X Learned Pattern', memory.focus || 'I need 2-3 logged sessions to learn this.'],
+    ['Last Session Comparison', lastComparison]
   ].map(card => `
     <div class="workout-insight-card">
       <span>${escapeWorkoutHtml(card[0])}</span>
@@ -282,7 +293,7 @@ function renderWorkoutExercise(exercise, index) {
       </div>
       <div class="workout-meta-row">
         <span>Last: ${last ? escapeWorkoutHtml(formatWorkoutPerformance(last)) : 'No history yet'}</span>
-        <span class="workout-progression">${escapeWorkoutHtml(suggestion)}</span>
+        <span class="workout-progression">${escapeWorkoutHtml(formatOverloadSuggestion(suggestion))}</span>
       </div>
       <div class="workout-badges">
         ${pr.map(label => `<span class="pr-badge">${escapeWorkoutHtml(label)}</span>`).join('') || '<span class="progression-badge">Baseline</span>'}
@@ -331,6 +342,7 @@ function saveWorkoutLog(silent = false) {
   dayLog.completed = workout.exercises.length > 0 && workout.exercises.every(exercise => dayLog.exercises[exercise.id]?.completed);
   workoutState.logs[date] = dayLog;
   workoutState.exerciseHistory = buildExerciseHistory(workoutState.logs);
+  updateXCoachMemoryFromWorkoutLog(dayLog);
   saveWorkoutState(workoutState);
   if (!silent) {
     showToast('Workout saved.');
@@ -518,7 +530,7 @@ function getWorkoutStatusLine() {
   const priority = status.priorityLift;
   if (!priority) return 'Log today to create your baseline.';
   const suggestion = getProgressiveOverloadSuggestion(priority, getExerciseHistory(priority.id));
-  return suggestion.includes('baseline') ? `Start with ${priority.name}. Create your baseline.` : `Beat last week by 1 rep on ${priority.name}.`;
+  return suggestion.status === 'Baseline' ? `Start with ${priority.name}. Create your baseline.` : `${suggestion.status}: ${suggestion.nextTarget}`;
 }
 
 function getWorkoutRecoveryWarning() {
@@ -802,4 +814,460 @@ function escapeWorkoutHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, ch => ({
     '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
   }[ch]));
+}
+
+// --- ADAPTIVE WORKOUT BRAIN + X MEMORY ---
+const X_COACH_MEMORY_KEY = 'xCoachMemory_v1';
+
+function getXCoachMemory() {
+  try {
+    const raw = localStorage.getItem(X_COACH_MEMORY_KEY);
+    if (raw) return normalizeXCoachMemory(JSON.parse(raw));
+  } catch(e) {}
+  return normalizeXCoachMemory({});
+}
+
+function normalizeXCoachMemory(value) {
+  return {
+    profile: {
+      name: value.profile?.name || 'Vinayak',
+      goal: value.profile?.goal || 'bulk / visible transformation',
+      trainingGoal: value.profile?.trainingGoal || 'muscle gain',
+      dietStyle: value.profile?.dietStyle || 'vegetarian + eggs',
+      gymTime: value.profile?.gymTime || '8 PM',
+      preferredFoods: value.profile?.preferredFoods || [],
+      dislikedFoods: value.profile?.dislikedFoods || [],
+      injuries: value.profile?.injuries || [],
+      weakMuscles: value.profile?.weakMuscles || [],
+      strongMuscles: value.profile?.strongMuscles || [],
+      preferredWorkoutStyle: value.profile?.preferredWorkoutStyle || '',
+      recoveryPattern: value.profile?.recoveryPattern || ''
+    },
+    learnedPatterns: {
+      frequentlyMissedMeals: value.learnedPatterns?.frequentlyMissedMeals || {},
+      frequentlyMissedWorkoutDays: value.learnedPatterns?.frequentlyMissedWorkoutDays || {},
+      strongestExercises: value.learnedPatterns?.strongestExercises || {},
+      plateauExercises: value.learnedPatterns?.plateauExercises || {},
+      painExercises: value.learnedPatterns?.painExercises || {},
+      bestPerformanceTime: value.learnedPatterns?.bestPerformanceTime || '',
+      underfedWorkoutCount: value.learnedPatterns?.underfedWorkoutCount || 0,
+      postWorkoutProteinMisses: value.learnedPatterns?.postWorkoutProteinMisses || 0
+    },
+    exerciseMemory: value.exerciseMemory || {},
+    coachNotes: Array.isArray(value.coachNotes) ? value.coachNotes.slice(-60) : [],
+    lastUpdated: value.lastUpdated || null
+  };
+}
+
+function saveXCoachMemory(memory) {
+  const normalized = normalizeXCoachMemory(memory);
+  normalized.lastUpdated = new Date().toISOString();
+  localStorage.setItem(X_COACH_MEMORY_KEY, JSON.stringify(normalized));
+}
+
+function clearXCoachMemory() {
+  localStorage.removeItem(X_COACH_MEMORY_KEY);
+  showToast('X memory cleared.');
+  renderAll();
+}
+
+function addCoachMemoryNote(note, source = 'manual') {
+  const memory = getXCoachMemory();
+  memory.coachNotes.push({ note: String(note || '').slice(0, 220), source, date: todayKey(), timestamp: new Date().toISOString() });
+  saveXCoachMemory(memory);
+}
+
+function updateXCoachMemoryFromDiet() {
+  const memory = getXCoachMemory();
+  if (typeof state === 'undefined') return memory;
+  const ctx = typeof getCoachContext === 'function' ? getCoachContext() : null;
+  (ctx?.missedMeals || []).forEach(meal => {
+    const name = cleanMemoryName(meal.name);
+    memory.learnedPatterns.frequentlyMissedMeals[name] = (memory.learnedPatterns.frequentlyMissedMeals[name] || 0) + 1;
+  });
+  if (ctx && ctx.remaining.protein > 20 && typeof getTodayWorkoutStatus === 'function' && getTodayWorkoutStatus().completedWorkout) {
+    memory.learnedPatterns.postWorkoutProteinMisses += 1;
+  }
+  saveXCoachMemory(memory);
+  return memory;
+}
+
+function updateXCoachMemoryFromWorkoutLog(workoutLog) {
+  const memory = getXCoachMemory();
+  if (!workoutLog) return memory;
+  if (!workoutLog.completed && workoutLog.dayName) {
+    memory.learnedPatterns.frequentlyMissedWorkoutDays[workoutLog.dayName] = (memory.learnedPatterns.frequentlyMissedWorkoutDays[workoutLog.dayName] || 0) + 1;
+  }
+  if (getDietRecoveryContext().underfed) memory.learnedPatterns.underfedWorkoutCount += 1;
+  Object.entries(workoutLog.exercises || {}).forEach(([exerciseId, log]) => {
+    const exercise = findExerciseById(exerciseId) || { id: exerciseId, name: humanizeWorkoutId(exerciseId), targetText: '' };
+    updateExerciseMemory(exercise, log, memory);
+  });
+  saveXCoachMemory(memory);
+  return memory;
+}
+
+function updateExerciseMemory(exercise, log, memory = getXCoachMemory()) {
+  const id = workoutId(exercise.id || exercise.name);
+  const volume = calculateVolume(log.weight, log.reps);
+  const totalReps = (log.reps || []).reduce((sum, reps) => sum + reps, 0);
+  const notes = String(log.notes || '');
+  const pain = hasPainNotes(notes);
+  const item = memory.exerciseMemory[id] || {
+    bestWeight: 0,
+    bestVolume: 0,
+    bestReps: 0,
+    lastGoodWeight: 0,
+    plateauCount: 0,
+    painFlags: 0,
+    preferredRepRange: exercise.repRange || '',
+    notesSummary: '',
+    lastUpdated: null
+  };
+  item.bestWeight = Math.max(item.bestWeight || 0, Number(log.weight) || 0);
+  item.bestVolume = Math.max(item.bestVolume || 0, volume);
+  item.bestReps = Math.max(item.bestReps || 0, totalReps);
+  if (!pain && log.completed) item.lastGoodWeight = Number(log.weight) || item.lastGoodWeight || 0;
+  if (pain) {
+    item.painFlags = (item.painFlags || 0) + 1;
+    memory.learnedPatterns.painExercises[exercise.name] = (memory.learnedPatterns.painExercises[exercise.name] || 0) + 1;
+  }
+  item.preferredRepRange = exercise.repRange || item.preferredRepRange || '';
+  item.notesSummary = notes ? notes.slice(0, 140) : item.notesSummary;
+  item.lastUpdated = new Date().toISOString();
+  memory.exerciseMemory[id] = item;
+  memory.learnedPatterns.strongestExercises[exercise.name] = Math.max(memory.learnedPatterns.strongestExercises[exercise.name] || 0, item.bestVolume);
+  return item;
+}
+
+function inferUserPatterns() {
+  const memory = updateXCoachMemoryFromDiet();
+  const workoutState = getWorkoutState();
+  Object.entries(workoutState.exerciseHistory || {}).forEach(([exerciseId, sessions]) => {
+    const exercise = findExerciseById(exerciseId) || { name: humanizeWorkoutId(exerciseId) };
+    if (isPlateaued(sessions)) memory.learnedPatterns.plateauExercises[exercise.name] = Math.max(memory.learnedPatterns.plateauExercises[exercise.name] || 0, 3);
+    const painCount = sessions.filter(item => hasPainNotes(item.notes)).length;
+    if (painCount) memory.learnedPatterns.painExercises[exercise.name] = Math.max(memory.learnedPatterns.painExercises[exercise.name] || 0, painCount);
+    const bestVolume = Math.max(...sessions.map(item => calculateVolume(item.weight, item.reps)), 0);
+    if (bestVolume) memory.learnedPatterns.strongestExercises[exercise.name] = Math.max(memory.learnedPatterns.strongestExercises[exercise.name] || 0, bestVolume);
+  });
+  saveXCoachMemory(memory);
+  const missedMeals = topEntries(memory.learnedPatterns.frequentlyMissedMeals);
+  const missedWorkouts = topEntries(memory.learnedPatterns.frequentlyMissedWorkoutDays);
+  const pain = topEntries(memory.learnedPatterns.painExercises);
+  const plateaus = topEntries(memory.learnedPatterns.plateauExercises);
+  const strong = topEntries(memory.learnedPatterns.strongestExercises);
+  const focus = missedMeals[0]?.count >= 2
+    ? `${getPatternConfidence(missedMeals[0].count)} confidence: ${missedMeals[0].name} consistency.`
+    : plateaus[0]?.count >= 2
+      ? `${getPatternConfidence(plateaus[0].count)} confidence: rebuild ${plateaus[0].name}.`
+      : memory.learnedPatterns.postWorkoutProteinMisses >= 2
+        ? `${getPatternConfidence(memory.learnedPatterns.postWorkoutProteinMisses)} confidence: post-workout protein is the focus.`
+        : '';
+  return {
+    missedMeals,
+    missedWorkouts,
+    painFlags: pain.map(item => `${getPatternConfidence(item.count)} confidence: ${item.name} pain/watch flag.`),
+    plateauExercises: plateaus,
+    strongestExercises: strong,
+    focus
+  };
+}
+
+function getUserLearningSummary() {
+  const memory = getXCoachMemory();
+  const patterns = inferUserPatterns();
+  const parts = [];
+  if (patterns.missedMeals[0]?.count >= 2) parts.push(`${patterns.missedMeals[0].name} is a consistency risk (${getPatternConfidence(patterns.missedMeals[0].count)} confidence)`);
+  if (patterns.strongestExercises[0]) parts.push(`${patterns.strongestExercises[0].name} is a strong trend`);
+  if (patterns.plateauExercises[0]?.count >= 2) parts.push(`${patterns.plateauExercises[0].name} is plateauing`);
+  if (patterns.painFlags[0]) parts.push(patterns.painFlags[0]);
+  if (memory.learnedPatterns.underfedWorkoutCount >= 2) parts.push('underfed workouts are repeating');
+  if (!parts.length) return 'I need 2-3 logged sessions before I can judge this properly.';
+  return parts.join('; ') + `. Coach focus: ${patterns.focus || 'log full sessions and hit post-workout protein.'}`;
+}
+
+function getPatternConfidence(count) {
+  if (count >= 3) return 'high';
+  if (count === 2) return 'medium';
+  return 'low';
+}
+
+function renderXCoachMemoryPanel() {
+  const patterns = inferUserPatterns();
+  const strongest = patterns.strongestExercises[0]?.name || 'Need more logged lifts';
+  const missed = patterns.missedMeals[0] ? `${patterns.missedMeals[0].name} (${getPatternConfidence(patterns.missedMeals[0].count)})` : 'No repeated miss yet';
+  const pain = patterns.painFlags[0] || 'No repeated pain flag';
+  const focus = patterns.focus || 'Log 2-3 full sessions and hit protein after gym.';
+  return `
+    <section class="x-memory-panel">
+      <div class="x-memory-head">
+        <div>
+          <span>X Memory</span>
+          <strong>Adaptive coach notes</strong>
+        </div>
+        <div class="x-memory-actions">
+          <button onclick="refreshXCoachMemory()">Refresh Memory</button>
+          <button onclick="clearXCoachMemory()">Clear X Memory</button>
+        </div>
+      </div>
+      <div class="x-memory-grid">
+        <div><span>Weak point</span><strong>${escapeWorkoutHtml(missed)}</strong></div>
+        <div><span>Watch</span><strong>${escapeWorkoutHtml(pain)}</strong></div>
+        <div><span>Strong trend</span><strong>${escapeWorkoutHtml(strongest)}</strong></div>
+        <div><span>Coach focus</span><strong>${escapeWorkoutHtml(focus)}</strong></div>
+      </div>
+    </section>`;
+}
+
+function refreshXCoachMemory() {
+  updateXCoachMemoryFromDiet();
+  const status = getTodayWorkoutStatus();
+  updateXCoachMemoryFromWorkoutLog(status.dayLog);
+  showToast('X memory refreshed.');
+  renderAll();
+}
+
+function getProgressiveOverloadSuggestion(exercise, history, todayContext = {}) {
+  const sessions = (history || []).filter(item => item.date !== todayKey()).slice(0, 4);
+  const last = sessions[0];
+  const target = parseSetRepTarget(exercise.targetText || exercise.repRange);
+  const recovery = { ...getDietRecoveryContext(), ...todayContext };
+  if (!last || !last.reps?.length) {
+    return overloadDecision('Baseline', 'No previous data.', 'Use a controllable weight inside target rep range. Log clean reps first.', '', 'Baseline');
+  }
+
+  const reps = last.reps.map(Number).filter(Number.isFinite);
+  const weight = Number(last.weight) || 0;
+  const notes = String(last.notes || '');
+  const pain = hasPainNotes(notes);
+  const fatigue = hasFatigueNotes(notes);
+  const rir = Number(last.rir);
+  const hasRir = Number.isFinite(rir);
+  const dropOff = hasBigSetDropOff(reps);
+  const topHit = target.max && reps.length >= (target.sets || exercise.sets || reps.length) && reps.slice(0, target.sets || reps.length).every(rep => rep >= target.max);
+  const belowMin = target.min && reps.some(rep => rep < target.min);
+  const plateau = isPlateaued(sessions);
+  const deload = isDeloadPattern(sessions);
+  const previous = sessions[1];
+  const repsDropped = previous && totalReps(last) < totalReps(previous);
+
+  if (recovery.underfed) return overloadDecision('Recovery limited', 'Underfed today.', "Match last session, don't chase PR. Eat carbs + protein before training.", 'Fuel first. No ego lifting.', 'Recovery limited');
+  if (pain) return overloadDecision(fatigue ? 'Deload' : 'Form focus', 'Pain noted.', 'Reduce load 10-15%, improve form, or swap exercise.', 'Do not chase PR.', 'Pain flag');
+  if (deload) return overloadDecision('Deload', 'Performance drop/fatigue pattern.', 'Reduce load 10-15% and rebuild clean reps.', 'Deload before the lift teaches bad reps.', 'Deload');
+  if (plateau) return overloadDecision('Plateau', 'No improvement for 3 sessions.', choosePlateauTarget(exercise, recovery), '', 'Plateau');
+  if (belowMin) return overloadDecision('Reduce', `Current weight is too heavy for target ${target.min}-${target.max}.`, 'Reduce weight slightly and hit clean minimum reps.', '', 'Reduce');
+  if (dropOff) return overloadDecision('Maintain', 'Big set drop-off.', 'Same weight, longer rest, match clean reps first. Reduce weight if reps keep crashing.', '', 'Maintain');
+  if (hasRir && rir <= 0) return overloadDecision('Maintain', 'Too close to failure.', 'Same weight, leave 1-2 reps in reserve.', '', 'Maintain');
+  if (repsDropped) return overloadDecision('Maintain', 'Reps dropped from last session.', 'Match last session before progressing.', '', 'Maintain');
+  if (topHit && (!hasRir || (rir >= 1 && rir <= 3))) {
+    const next = isCompoundExercise(exercise.name)
+      ? `${trimNumber(weight + 2.5)}kg to ${trimNumber(weight + 5)}kg for ${exercise.repRange} reps`
+      : `${weight ? trimNumber(weight) + 'kg' : 'same weight'} with cleaner reps/tempo, or the smallest weight jump`;
+    return overloadDecision('Add weight', 'Top range hit cleanly.', `Try ${next}.`, '', 'Add weight');
+  }
+  if (hasRir && rir >= 4 && reps.every(rep => rep >= target.min)) {
+    const status = isCompoundExercise(exercise.name) ? 'Add weight' : 'Form focus';
+    return overloadDecision(status, 'Too easy.', isCompoundExercise(exercise.name) ? 'Increase slightly while staying inside the target range.' : 'Use slower tempo or the smallest possible jump.', '', status);
+  }
+
+  const nextReps = reps.slice(0, target.sets || reps.length);
+  const idx = nextReps.indexOf(Math.min(...nextReps));
+  if (idx >= 0) nextReps[idx] += 1;
+  return overloadDecision('Add reps', 'Performance is stable inside the rep range.', `${weight ? trimNumber(weight) + 'kg x ' : ''}${nextReps.join(',')}. Add only 1 total rep.`, '', 'Add reps');
+}
+
+function detectPersonalRecord(exercise, currentLog, history) {
+  if (!currentLog || !currentLog.reps || !currentLog.reps.length) return [];
+  const past = (history || []).filter(item => item.date !== todayKey());
+  if (!past.length) return [];
+  const pain = hasPainNotes(currentLog.notes);
+  const currentWeight = Number(currentLog.weight) || 0;
+  const currentVolume = calculateVolume(currentWeight, currentLog.reps);
+  const currentReps = totalReps(currentLog);
+  const currentE1rm = estimatedStrength(currentWeight, Math.max(...currentLog.reps));
+  const maxWeight = Math.max(...past.map(item => Number(item.weight) || 0), 0);
+  const maxVolume = Math.max(...past.map(item => calculateVolume(item.weight, item.reps)), 0);
+  const maxE1rm = Math.max(...past.map(item => estimatedStrength(item.weight, Math.max(...item.reps || [0]))), 0);
+  const sameWeightBestReps = Math.max(...past.filter(item => Number(item.weight) === currentWeight).map(totalReps), 0);
+  const badges = [];
+  if (currentVolume > maxVolume) badges.push('Volume PR');
+  if (currentWeight > maxWeight) badges.push('Weight PR');
+  if (currentWeight && currentReps > sameWeightBestReps && sameWeightBestReps > 0) badges.push('Rep PR');
+  if (currentE1rm > maxE1rm) badges.push('Estimated strength PR');
+  if (badges.length && pain) badges.push('PR with pain - do not repeat load until form is clean');
+  return badges;
+}
+
+function getWorkoutWeeklyReview() {
+  const workoutState = getWorkoutState();
+  const memory = inferUserPatterns();
+  const now = new Date();
+  let trainingDays = 0;
+  let sessionsCompleted = 0;
+  let exercisesLogged = 0;
+  const missedWorkoutDays = [];
+  let prCount = 0;
+  let painCount = 0;
+
+  for (let i = 0; i < 7; i++) {
+    const date = new Date(now);
+    date.setDate(now.getDate() - i);
+    const key = dateKeyFromDate(date);
+    const dayName = date.toLocaleDateString('en-US', { weekday: 'long' });
+    const workout = workoutState.split.find(item => item.day === dayName);
+    if (!workout || workout.rest || !workout.exercises.length) continue;
+    trainingDays++;
+    const log = workoutState.logs[key];
+    const doneCount = Object.values(log?.exercises || {}).filter(item => item.completed).length;
+    exercisesLogged += doneCount;
+    if (doneCount === workout.exercises.length) sessionsCompleted++;
+    else if (key < todayKey()) missedWorkoutDays.push(dayName);
+    Object.entries(log?.exercises || {}).forEach(([id, entry]) => {
+      const exercise = findExerciseById(id) || { id, name: humanizeWorkoutId(id) };
+      const badges = detectPersonalRecord(exercise, entry, getExerciseHistory(id));
+      prCount += badges.filter(b => /PR/.test(b)).length;
+      if (hasPainNotes(entry.notes)) painCount++;
+    });
+  }
+
+  const diet = getDietWeeklySnapshot();
+  const strongest = memory.strongestExercises[0]?.name || 'No lift PR yet';
+  const failed = [
+    missedWorkoutDays.length ? `missed ${missedWorkoutDays.join(', ')}` : '',
+    diet.proteinMisses >= 2 ? `protein missed ${diet.proteinMisses} times` : '',
+    painCount ? `${painCount} pain note(s)` : ''
+  ].filter(Boolean).join('; ') || 'nothing obvious';
+  const bottleneck = diet.proteinMisses >= 2 || diet.lowCalorieDays >= 2 ? 'recovery, not effort' : painCount ? 'pain/form management' : missedWorkoutDays.length ? 'training consistency' : 'progressive overload execution';
+  const nextFocus = diet.proteinMisses >= 2 ? 'hit post-workout protein and maintain pressing weights' : missedWorkoutDays.length ? 'complete every scheduled session' : prCount ? 'keep PRs clean without pain' : 'log complete sets and match last session';
+  return {
+    sessionsCompleted,
+    trainingDays,
+    exercisesLogged,
+    strongestLiftImprovement: strongest,
+    missedWorkoutDays,
+    whatImproved: prCount ? `${prCount} PR signal(s), strongest trend: ${strongest}` : `Best trend: ${strongest}`,
+    whatFailed: failed,
+    mainBottleneck: bottleneck,
+    nextWeekFocus: nextFocus,
+    oneRule: 'No PR attempts when calories are under 70%.',
+    fixForNextWeek: nextFocus,
+    summary: `${sessionsCompleted}/${trainingDays} sessions, ${exercisesLogged} exercises logged. Improved: ${prCount ? prCount + ' PR signals' : strongest}. Failed: ${failed}. Bottleneck: ${bottleneck}.`
+  };
+}
+
+function getWorkoutCoachContext() {
+  const status = getTodayWorkoutStatus();
+  const workout = status.workout;
+  const priority = status.priorityLift;
+  const memorySummary = getUserLearningSummary();
+  return {
+    todayWorkout: workout,
+    focus: workout.focus,
+    exercisesCompleted: `${status.completed}/${status.total}`,
+    pendingExercises: status.pendingExercises.map(exercise => exercise.name),
+    priorityLift: priority ? priority.name : 'none',
+    lastPerformance: priority ? getLastExercisePerformance(priority.id) : null,
+    progressiveOverloadSuggestions: (workout.exercises || []).slice(0, 5).map(exercise => ({
+      exercise: exercise.name,
+      suggestion: getProgressiveOverloadSuggestion(exercise, getExerciseHistory(exercise.id))
+    })),
+    weeklyWorkoutConsistency: getWorkoutWeeklyReview(),
+    memorySummary,
+    learnedPatterns: inferUserPatterns()
+  };
+}
+
+function formatOverloadSuggestion(decision) {
+  if (!decision) return '';
+  if (typeof decision === 'string') return decision;
+  return `${decision.status}: ${decision.nextTarget}${decision.warning ? ` Warning: ${decision.warning}` : ''}`;
+}
+
+function overloadDecision(status, reason, nextTarget, warning = '', badge = status) {
+  return { status, reason, nextTarget, warning, badge };
+}
+
+function hasPainNotes(notes = '') {
+  return /(pain|shoulder pain|elbow pain|wrist pain|back pain|knee pain|sharp|strain|injury|uncomfortable)/i.test(notes);
+}
+
+function hasFatigueNotes(notes = '') {
+  return /(fatigue|tired|exhausted|grinding|failure|failed|sleep|sore|drained)/i.test(notes);
+}
+
+function hasBigSetDropOff(reps) {
+  if (!Array.isArray(reps) || reps.length < 3) return false;
+  return reps[0] - reps[reps.length - 1] >= 4 || reps.some((rep, index) => index > 0 && reps[index - 1] - rep >= 3);
+}
+
+function isPlateaued(sessions) {
+  if (!sessions || sessions.length < 3) return false;
+  const volumes = sessions.slice(0, 3).map(item => calculateVolume(item.weight, item.reps));
+  const best = Math.max(...volumes);
+  const worst = Math.min(...volumes);
+  return best > 0 && (best - worst) / best < 0.03;
+}
+
+function isDeloadPattern(sessions) {
+  if (!sessions || sessions.length < 3) return false;
+  const volumes = sessions.slice(0, 3).map(item => calculateVolume(item.weight, item.reps));
+  const painOrFatigue = sessions.slice(0, 3).filter(item => hasPainNotes(item.notes) || hasFatigueNotes(item.notes)).length;
+  return (volumes[0] < volumes[1] && volumes[1] < volumes[2]) || painOrFatigue >= 2;
+}
+
+function choosePlateauTarget(exercise, recovery) {
+  if (recovery.underfed) return 'Fix food first, then match last session. No PR attempt.';
+  if (isCompoundExercise(exercise.name)) return 'Add rest time, reduce load 5-10%, and rebuild clean reps.';
+  return 'Use slower tempo, cleaner reps, or change rep target before adding load.';
+}
+
+function getDietRecoveryContext() {
+  if (typeof getCoachContext !== 'function') return { underfed: false, proteinLow: false, caloriesLow: false };
+  const ctx = getCoachContext();
+  const caloriesLow = ctx.consumed.kcal < ctx.totals.kcal * 0.7;
+  const proteinLow = ctx.consumed.protein < ctx.totals.protein * 0.7;
+  return { underfed: caloriesLow || proteinLow, caloriesLow, proteinLow, ctx };
+}
+
+function getDietWeeklySnapshot() {
+  if (typeof state === 'undefined') return { proteinMisses: 0, lowCalorieDays: 0 };
+  const totalKcal = state.meals.reduce((a, m) => a + m.kcal, 0) || 3320;
+  const totalProtein = state.meals.reduce((a, m) => a + m.protein, 0) || 149;
+  let proteinMisses = 0;
+  let lowCalorieDays = 0;
+  for (let i = 0; i < 7; i++) {
+    const date = new Date();
+    date.setDate(date.getDate() - i);
+    const key = dateKeyFromDate(date);
+    const done = state.meals.filter(m => state.checked?.[`${key}_${m.id}`]);
+    const kcal = done.reduce((a, m) => a + m.kcal, 0);
+    const protein = done.reduce((a, m) => a + m.protein, 0);
+    if (protein < totalProtein * 0.7) proteinMisses++;
+    if (kcal < totalKcal * 0.7) lowCalorieDays++;
+  }
+  return { proteinMisses, lowCalorieDays };
+}
+
+function totalReps(log) {
+  return (log.reps || []).reduce((sum, reps) => sum + (Number(reps) || 0), 0);
+}
+
+function estimatedStrength(weight, reps) {
+  return (Number(weight) || 0) * (1 + ((Number(reps) || 0) / 30));
+}
+
+function findExerciseById(exerciseId) {
+  return getWorkoutState().split.flatMap(day => day.exercises || []).find(ex => ex.id === workoutId(exerciseId) || workoutId(ex.name) === workoutId(exerciseId));
+}
+
+function topEntries(obj) {
+  return Object.entries(obj || {})
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 5);
+}
+
+function cleanMemoryName(name) {
+  return String(name || '').replace(/^[^\w\s]*/, '').trim() || 'Unknown';
 }
