@@ -3543,7 +3543,7 @@ document.getElementById('snapModal').addEventListener('click', function(e) {
   if (e.target === this) closeSnapModal();
 });
 
-function handleSnapFile(input) {
+async function handleSnapFile(input) {
   const file = input.files && input.files[0];
   if (!file) return;
 
@@ -3556,16 +3556,55 @@ function handleSnapFile(input) {
   document.getElementById('snapActions').style.display = 'none';
   setSnapStatus('loading', 'Analyzing food...');
 
-  const reader = new FileReader();
-  reader.onload = async (e) => {
-    snapImageData = {
-      b64: String(e.target.result || '').split(',')[1] || '',
-      mime: file.type || 'image/jpeg'
-    };
+  try {
+    snapImageData = await compressSnapImage(file);
+    console.log('AI Food Scan compressed image:', {
+      mime: snapImageData.mime,
+      width: snapImageData.width,
+      height: snapImageData.height,
+      approxBytes: Math.round((snapImageData.b64.length * 3) / 4)
+    });
     await estimateSnapMeal();
-  };
-  reader.onerror = () => setSnapStatus('error', 'Could not read this image. Try another photo or describe the meal.');
-  reader.readAsDataURL(file);
+  } catch (err) {
+    console.error('AI Food Scan image compression failed:', err);
+    snapImageData = null;
+    setSnapStatus('error', 'Could not read this image. Try another photo or describe the meal.');
+  }
+}
+
+function compressSnapImage(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(new Error('Could not read image file'));
+    reader.onload = () => {
+      const image = new Image();
+      image.onerror = () => reject(new Error('Could not load image file'));
+      image.onload = () => {
+        const maxSize = 768;
+        const scale = Math.min(1, maxSize / image.width, maxSize / image.height);
+        const width = Math.max(1, Math.round(image.width * scale));
+        const height = Math.max(1, Math.round(image.height * scale));
+        const canvas = document.createElement('canvas');
+        canvas.width = width;
+        canvas.height = height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Could not prepare image canvas'));
+          return;
+        }
+        ctx.drawImage(image, 0, 0, width, height);
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.75);
+        resolve({
+          b64: dataUrl.split(',')[1] || '',
+          mime: 'image/jpeg',
+          width,
+          height
+        });
+      };
+      image.src = String(reader.result || '');
+    };
+    reader.readAsDataURL(file);
+  });
 }
 
 function onSnapDescInput(el) {
@@ -3598,20 +3637,21 @@ async function estimateSnapMeal() {
     setSnapStatus('success', 'Review the estimate before saving.');
     return result;
   } catch (err) {
+    console.error('AI Food Scan estimate failed:', err);
     if (snapImageData) {
       if (desc) {
         const fallback = estimateSnapMealLocally(desc);
         if (fallback.kcal > 20) {
           fallback.needsReview = true;
           renderSnapResult(fallback);
-          setSnapStatus('success', 'Used text fallback. Review before saving.');
+          setSnapStatus('success', 'Used text fallback because photo scan failed. Review before saving.');
           return fallback;
         }
       }
 
       document.getElementById('snapResult').style.display = 'none';
       document.getElementById('snapActions').style.display = 'none';
-      setSnapStatus('error', "AI could not estimate this photo. Add text like 'burger + fries' and try again.");
+      setSnapStatus('error', "Photo scan failed. Add a short description like 'burger + fries' and try again.");
       return null;
     }
 
@@ -3685,20 +3725,31 @@ Use the numbers above only as format examples, not as the answer. Estimate reali
       ]
     : prompt;
 
+  const model = imageData ? 'google/gemma-3-27b-it:free' : 'llama-3.1-8b-instant';
+  console.log('AI Food Scan model used:', model);
+  console.log('AI Food Scan imageData exists:', !!imageData);
+
   const res = await fetch(AI_FOOD_SCAN_WORKER_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: imageData ? 'google/gemma-3-27b-it:free' : 'llama-3.1-8b-instant',
+      model,
       max_tokens: imageData ? 1200 : 450,
       messages: [{ role: 'user', content }]
     })
   });
 
+  console.log('AI Food Scan response status:', res.status);
   if (!res.ok) throw new Error('Worker ' + res.status);
   const data = await res.json();
   const raw = extractSnapWorkerText(data);
-  const parsed = parseSnapJson(raw);
+  let parsed;
+  try {
+    parsed = parseSnapJson(raw);
+  } catch (parseErr) {
+    console.log('AI Food Scan raw Worker response:', raw);
+    throw parseErr;
+  }
   const result = normalizeSnapMeal(parsed, desc);
   if (!imageData && isSnapInvalidEstimate(result) && hasSnapFoodText(desc)) {
     const fallback = estimateSnapMealLocally(desc);
