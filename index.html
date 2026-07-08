@@ -3598,6 +3598,13 @@ async function estimateSnapMeal() {
     setSnapStatus('success', 'Review the estimate before saving.');
     return result;
   } catch (err) {
+    if (snapImageData) {
+      document.getElementById('snapResult').style.display = 'none';
+      document.getElementById('snapActions').style.display = 'none';
+      setSnapStatus('error', "AI could not estimate from photo. Add text like 'burger + fries' and try again.");
+      return null;
+    }
+
     const fallback = estimateSnapMealLocally(desc);
     fallback.needsReview = true;
     renderSnapResult(fallback);
@@ -3607,23 +3614,26 @@ async function estimateSnapMeal() {
 }
 
 async function estimateSnapMealWithWorker(desc, imageData) {
+  const runWorkerEstimate = async (retry) => {
   const prompt = `You are AI Food Scan v2 for a diet tracker.
 Estimate the meal from ${imageData ? 'the image' : 'the text'}${desc ? ` and this user note: "${desc}"` : ''}.
+${retry ? 'This is a real food image. You must estimate approximate calories and macros. Do not return zeros unless the image has no food.' : ''}
 Return ONLY valid JSON in this exact shape:
 {
-  "name": "Meal name",
+  "name": "Paneer rice bowl",
   "emoji": "single food emoji",
-  "kcal": 0,
-  "protein": 0,
-  "carbs": 0,
-  "fat": 0,
+  "kcal": 650,
+  "protein": 25,
+  "carbs": 75,
+  "fat": 28,
   "items": [
-    { "name": "Food", "qty": "quantity", "cal": 0, "pro": 0 }
+    { "name": "Paneer curry", "qty": "1 cup", "cal": 320, "pro": 18 },
+    { "name": "Rice", "qty": "1.5 cups cooked", "cal": 330, "pro": 7 }
   ],
   "confidence": "low|medium|high",
   "needsReview": true
 }
-Use realistic Indian household portions when exact quantity is unclear. Set needsReview true for uncertain estimates.`;
+Use the numbers above only as format examples, not as the answer. Estimate realistic Indian household portions when exact quantity is unclear. Set needsReview true for uncertain estimates.`;
 
   const content = imageData
     ? [
@@ -3646,7 +3656,17 @@ Use realistic Indian household portions when exact quantity is unclear. Set need
   const data = await res.json();
   const raw = extractSnapWorkerText(data);
   const parsed = parseSnapJson(raw);
-  return normalizeSnapMeal(parsed, desc);
+  const result = normalizeSnapMeal(parsed, desc);
+  validateSnapMealEstimate(result, imageData);
+  return result;
+  };
+
+  try {
+    return await runWorkerEstimate(false);
+  } catch (err) {
+    if (!imageData) throw err;
+    return await runWorkerEstimate(true);
+  }
 }
 
 function extractSnapWorkerText(data) {
@@ -3704,6 +3724,15 @@ function normalizeSnapMeal(input, desc) {
     confidence,
     needsReview: source.needsReview !== false
   };
+}
+
+function validateSnapMealEstimate(result, imageData) {
+  if (!imageData) return;
+  const items = Array.isArray(result.items) ? result.items : [];
+  if (result.kcal <= 20) throw new Error('Invalid zero estimate');
+  if (!items.length || items.every(item => snapNumber(item.cal, 0) <= 0)) {
+    throw new Error('Invalid zero estimate');
+  }
 }
 
 function snapNumber(value, fallback) {
