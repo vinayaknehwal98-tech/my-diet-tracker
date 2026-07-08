@@ -3632,9 +3632,35 @@ async function estimateSnapMeal() {
 
 async function estimateSnapMealWithWorker(desc, imageData) {
   const runWorkerEstimate = async (retry) => {
-    const prompt = `You are AI Food Scan v2 for a diet tracker.
-Estimate the meal from ${imageData ? 'the image' : 'the text'}${desc ? ` and this user note: "${desc}"` : ''}.
+    const prompt = imageData
+      ? `You are AI Food Scan v2 for a diet tracker.
+Identify the food(s) visible in this real food image${desc ? ` using this user note as extra context: "${desc}"` : ''}.
+Estimate approximate calories, protein, carbs, and fat using realistic restaurant / household portions.
+Do not return zeros unless there is clearly no food visible.
 ${retry ? 'This is a real food image. You must estimate approximate calories and macros. Do not return zeros unless the image has no food.' : ''}
+
+If the image looks like burger + fries, estimate approximately:
+- burger: 450 kcal, 22g protein, 40g carbs, 22g fat
+- fries: 350 kcal, 5g protein, 45g carbs, 18g fat
+
+Return ONLY valid JSON in this exact shape:
+{
+  "name": "Burger with fries",
+  "emoji": "🍽️",
+  "kcal": 800,
+  "protein": 27,
+  "carbs": 85,
+  "fat": 40,
+  "items": [
+    { "name": "Burger", "qty": "1 burger", "cal": 450, "pro": 22 },
+    { "name": "Fries", "qty": "1 serving", "cal": 350, "pro": 5 }
+  ],
+  "confidence": "medium",
+  "needsReview": true
+}
+Use the numbers above only as format examples unless the food is actually burger + fries.`
+      : `You are AI Food Scan v2 for a diet tracker.
+Estimate the meal from the text${desc ? `: "${desc}"` : ''}.
 Return ONLY valid JSON in this exact shape:
 {
   "name": "Paneer rice bowl",
@@ -3663,8 +3689,8 @@ Use the numbers above only as format examples, not as the answer. Estimate reali
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
-      model: imageData ? 'meta-llama/llama-4-scout-17b-16e-instruct' : 'llama-3.1-8b-instant',
-      max_tokens: imageData ? 700 : 450,
+      model: imageData ? 'google/gemma-3-27b-it:free' : 'llama-3.1-8b-instant',
+      max_tokens: imageData ? 1200 : 450,
       messages: [{ role: 'user', content }]
     })
   });
