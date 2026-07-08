@@ -2,6 +2,8 @@
 const WORKOUT_STORAGE_KEY = 'bulkWorkout_v1';
 
 let pendingWorkoutImport = null;
+let workoutStateCache = null;
+let workoutSaveTimer = null;
 
 function defaultWorkoutSplit() {
   return [
@@ -103,11 +105,20 @@ function workoutExercise(name, sets, repRange) {
 }
 
 function getWorkoutState() {
+  if (workoutStateCache) return workoutStateCache;
   try {
     const raw = localStorage.getItem(WORKOUT_STORAGE_KEY);
-    if (raw) return normalizeWorkoutState(JSON.parse(raw));
+    if (raw) {
+      workoutStateCache = normalizeWorkoutState(JSON.parse(raw));
+      return workoutStateCache;
+    }
   } catch(e) {}
-  return normalizeWorkoutState({});
+  workoutStateCache = normalizeWorkoutState({});
+  return workoutStateCache;
+}
+
+function invalidateWorkoutCache() {
+  workoutStateCache = null;
 }
 
 function normalizeWorkoutState(value) {
@@ -158,7 +169,10 @@ function migrateWorkoutLogs(oldLogs) {
 }
 
 function saveWorkoutState(workoutState) {
-  const stateToSave = normalizeWorkoutState(workoutState || {});
+  const stateToSave = workoutState?.split && workoutState?.logs && workoutState?.settings
+    ? workoutState
+    : normalizeWorkoutState(workoutState || {});
+  workoutStateCache = stateToSave;
   localStorage.setItem(WORKOUT_STORAGE_KEY, JSON.stringify(stateToSave));
 }
 
@@ -191,11 +205,15 @@ function createEmptyWorkoutLog(workout) {
 }
 
 function renderWorkout() {
+  console.time('renderWorkout');
   const workout = getTodayWorkout();
   const status = getTodayWorkoutStatus();
   const review = getWorkoutWeeklyReview();
+  const workoutLog = getWorkoutLog();
+  const exerciseRenderCache = buildWorkoutExerciseRenderCache(workout, workoutLog);
 
   if (workout.rest || !workout.exercises.length) {
+    console.timeEnd('renderWorkout');
     return `
       <section class="workout-hero rest">
         <div>
@@ -213,7 +231,7 @@ function renderWorkout() {
       </div>`;
   }
 
-  return `
+  const html = `
     <section class="workout-hero">
       <div>
         <div class="workout-kicker">Today: ${escapeWorkoutHtml(workout.day)}</div>
@@ -238,12 +256,40 @@ function renderWorkout() {
       ${renderWorkoutInsightCards(status, review)}
     </div>
 
-    ${renderXCoachMemoryPanel()}
+    ${renderLazyWorkoutMemoryPanel()}
 
     <form class="workout-list" onsubmit="event.preventDefault(); saveWorkoutLog();">
-      ${workout.exercises.map((exercise, index) => renderWorkoutExercise(exercise, index)).join('')}
+      ${workout.exercises.map((exercise, index) => renderWorkoutExercise(exercise, index, exerciseRenderCache[exercise.id])).join('')}
       <button class="btn-save workout-save" type="submit">Save Workout</button>
     </form>`;
+  console.timeEnd('renderWorkout');
+  return html;
+}
+
+function buildWorkoutExerciseRenderCache(workout, workoutLog) {
+  const cache = {};
+  (workout.exercises || []).forEach(exercise => {
+    const todayLog = normalizeExerciseLog(workoutLog.exercises?.[exercise.id] || {}, exercise);
+    const history = getExerciseHistory(exercise.id);
+    cache[exercise.id] = {
+      todayLog,
+      history,
+      last: history.find(item => item.date !== todayKey()) || null,
+      suggestion: getProgressiveOverloadSuggestion(exercise, history),
+      pr: detectPersonalRecord(exercise, todayLog, history)
+    };
+  });
+  return cache;
+}
+
+function renderLazyWorkoutMemoryPanel() {
+  setTimeout(() => {
+    const slot = document.getElementById('workoutMemoryLazySlot');
+    if (slot && typeof renderXCoachMemoryPanel === 'function') {
+      slot.outerHTML = renderXCoachMemoryPanel();
+    }
+  }, 80);
+  return '<section id="workoutMemoryLazySlot" class="x-memory-panel"><div class="x-memory-head"><div><span>X Memory</span><strong>Loading coach notes...</strong></div></div></section>';
 }
 
 function renderWorkoutInsightCards(status, review) {
@@ -287,7 +333,7 @@ function renderWorkoutExercise(exercise, index) {
           <p>${escapeWorkoutHtml(exercise.targetText)}</p>
         </div>
         <label class="workout-done">
-          <input type="checkbox" id="wo_done_${exercise.id}" ${todayLog.completed ? 'checked' : ''} onchange="saveWorkoutLog(true)">
+          <input type="checkbox" id="wo_done_${exercise.id}" ${todayLog.completed ? 'checked' : ''} onchange="saveWorkoutLog(true, { updateMemory: true })">
           <span>Done</span>
         </label>
       </div>
@@ -299,11 +345,11 @@ function renderWorkoutExercise(exercise, index) {
         ${pr.map(label => `<span class="pr-badge">${escapeWorkoutHtml(label)}</span>`).join('') || '<span class="progression-badge">Baseline</span>'}
       </div>
       <div class="workout-input-grid">
-        <label>Weight (${getWorkoutState().settings.units})<input type="number" inputmode="decimal" step="0.5" id="wo_weight_${exercise.id}" value="${todayLog.weight ?? ''}" placeholder="0" oninput="saveWorkoutLog(true)"></label>
-        <label>Reps per set<input type="text" id="wo_reps_${exercise.id}" value="${escapeWorkoutHtml(repsValue)}" placeholder="${placeholderForExercise(exercise)}" oninput="saveWorkoutLog(true)"></label>
-        <label>RIR<input type="number" inputmode="numeric" id="wo_rir_${exercise.id}" value="${todayLog.rir ?? ''}" placeholder="2" oninput="saveWorkoutLog(true)"></label>
+        <label>Weight (${getWorkoutState().settings.units})<input type="number" inputmode="decimal" step="0.5" id="wo_weight_${exercise.id}" value="${todayLog.weight ?? ''}" placeholder="0" oninput="debouncedSaveWorkoutLog()"></label>
+        <label>Reps per set<input type="text" id="wo_reps_${exercise.id}" value="${escapeWorkoutHtml(repsValue)}" placeholder="${placeholderForExercise(exercise)}" oninput="debouncedSaveWorkoutLog()"></label>
+        <label>RIR<input type="number" inputmode="numeric" id="wo_rir_${exercise.id}" value="${todayLog.rir ?? ''}" placeholder="2" oninput="debouncedSaveWorkoutLog()"></label>
       </div>
-      <textarea class="workout-notes" id="wo_notes_${exercise.id}" placeholder="Notes, form cues, machine setting..." oninput="saveWorkoutLog(true)">${escapeWorkoutHtml(todayLog.notes || '')}</textarea>
+      <textarea class="workout-notes" id="wo_notes_${exercise.id}" placeholder="Notes, form cues, machine setting..." oninput="debouncedSaveWorkoutLog()">${escapeWorkoutHtml(todayLog.notes || '')}</textarea>
     </article>`;
 }
 
@@ -1178,6 +1224,15 @@ function getWorkoutCoachContext() {
   };
 }
 
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', () => {
+    if (typeof flushWorkoutAutosave === 'function') flushWorkoutAutosave();
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'hidden' && typeof flushWorkoutAutosave === 'function') flushWorkoutAutosave();
+  });
+}
+
 function formatOverloadSuggestion(decision) {
   if (!decision) return '';
   if (typeof decision === 'string') return decision;
@@ -1515,13 +1570,13 @@ function copyPreviousSet(exerciseId, setIndex) {
   });
   const done = document.getElementById(`wo_set_done_${exerciseId}_${setIndex}`);
   if (done) done.checked = true;
-  saveWorkoutLog(true);
+  debouncedSaveWorkoutLog();
 }
 
 function updateSetField(exerciseId, setIndex, field, value) {
   const input = document.getElementById(`wo_set_${field}_${exerciseId}_${setIndex}`);
   if (input && input.value !== String(value ?? '')) input.value = value;
-  saveWorkoutLog(true);
+  debouncedSaveWorkoutLog();
 }
 
 function applyWeightToAllSets(exerciseId) {
@@ -1533,7 +1588,7 @@ function applyWeightToAllSets(exerciseId) {
     const input = document.getElementById(`wo_set_weight_${exerciseId}_${index}`);
     if (input) input.value = weight;
   }
-  saveWorkoutLog(true);
+  debouncedSaveWorkoutLog();
 }
 
 function applyTemplateFromLastSession(exerciseId) {
@@ -1551,7 +1606,7 @@ function applyTemplateFromLastSession(exerciseId) {
     if (repsInput && lastSet?.reps !== undefined) repsInput.value = lastSet.reps;
     if (weightInput && lastSet?.weight !== undefined) weightInput.value = lastSet.weight;
   }
-  saveWorkoutLog(true);
+  debouncedSaveWorkoutLog();
 }
 
 function renderExerciseSetRows(exercise, setRows) {
@@ -1574,7 +1629,7 @@ function renderExerciseSetRows(exercise, setRows) {
           <label class="set-cell"><span>Weight</span><input type="number" inputmode="decimal" step="0.5" id="wo_set_weight_${id}_${index}" value="${escapeWorkoutHtml(row.weight)}" placeholder="kg" oninput="updateSetField('${id}', ${index}, 'weight', this.value)"></label>
           <label class="set-cell"><span>Reps</span><input type="text" inputmode="decimal" id="wo_set_reps_${id}_${index}" value="${escapeWorkoutHtml(row.reps)}" placeholder="${placeholderForExercise(exercise).split(',')[index] || ''}" oninput="updateSetField('${id}', ${index}, 'reps', this.value)"></label>
           <label class="set-cell"><span>RIR</span><input type="number" inputmode="numeric" id="wo_set_rir_${id}_${index}" value="${escapeWorkoutHtml(row.rir)}" placeholder="2" oninput="updateSetField('${id}', ${index}, 'rir', this.value)"></label>
-          <label class="set-cell set-done-cell"><span>Done</span><input type="checkbox" id="wo_set_done_${id}_${index}" ${row.completed ? 'checked' : ''} onchange="saveWorkoutLog(true)"></label>
+          <label class="set-cell set-done-cell"><span>Done</span><input type="checkbox" id="wo_set_done_${id}_${index}" ${row.completed ? 'checked' : ''} onchange="saveWorkoutLog(true, { updateMemory: true })"></label>
           <div class="set-cell"><button class="copy-set-btn" type="button" onclick="copyPreviousSet('${id}', ${index})" ${index === 0 ? 'disabled' : ''}>Copy</button></div>
         </div>`).join('')}
     </div>
@@ -1586,12 +1641,13 @@ function renderExerciseSetRows(exercise, setRows) {
     </div>`;
 }
 
-function renderWorkoutExercise(exercise, index) {
-  const todayLog = normalizeExerciseLog(getWorkoutLog().exercises[exercise.id] || {}, exercise);
-  const history = getExerciseHistory(exercise.id);
-  const last = getLastExercisePerformance(exercise.id);
-  const suggestion = getProgressiveOverloadSuggestion(exercise, history);
-  const pr = detectPersonalRecord(exercise, todayLog, history);
+function renderWorkoutExercise(exercise, index, cached = null) {
+  const fallbackLog = cached ? null : normalizeExerciseLog(getWorkoutLog().exercises[exercise.id] || {}, exercise);
+  const todayLog = cached?.todayLog || fallbackLog;
+  const history = cached?.history || getExerciseHistory(exercise.id);
+  const last = cached?.last || history.find(item => item.date !== todayKey()) || null;
+  const suggestion = cached?.suggestion || getProgressiveOverloadSuggestion(exercise, history);
+  const pr = cached?.pr || detectPersonalRecord(exercise, todayLog, history);
   return `
     <article class="workout-card ${todayLog.completed ? 'complete' : ''}">
       <div class="workout-card-head">
@@ -1601,7 +1657,7 @@ function renderWorkoutExercise(exercise, index) {
           <p>${escapeWorkoutHtml(exercise.targetText)}</p>
         </div>
         <label class="workout-done">
-          <input type="checkbox" id="wo_done_${exercise.id}" ${todayLog.completed ? 'checked' : ''} onchange="saveWorkoutLog(true)">
+          <input type="checkbox" id="wo_done_${exercise.id}" ${todayLog.completed ? 'checked' : ''} onchange="saveWorkoutLog(true, { updateMemory: true })">
           <span>Done</span>
         </label>
       </div>
@@ -1613,11 +1669,26 @@ function renderWorkoutExercise(exercise, index) {
         ${pr.map(label => `<span class="pr-badge">${escapeWorkoutHtml(label)}</span>`).join('') || `<span class="progression-badge">${escapeWorkoutHtml(detectSetPattern(todayLog.sets))}</span>`}
       </div>
       ${renderExerciseSetRows(exercise, todayLog.sets)}
-      <textarea class="workout-notes" id="wo_notes_${exercise.id}" placeholder="Notes, form cues, machine setting..." oninput="saveWorkoutLog(true)">${escapeWorkoutHtml(todayLog.notes || '')}</textarea>
+      <textarea class="workout-notes" id="wo_notes_${exercise.id}" placeholder="Notes, form cues, machine setting..." oninput="debouncedSaveWorkoutLog()">${escapeWorkoutHtml(todayLog.notes || '')}</textarea>
     </article>`;
 }
 
-function saveWorkoutLog(silent = false) {
+function debouncedSaveWorkoutLog() {
+  clearTimeout(workoutSaveTimer);
+  workoutSaveTimer = setTimeout(() => saveWorkoutLog(true, { debounced: true }), 400);
+}
+
+function flushWorkoutAutosave() {
+  if (!workoutSaveTimer) return;
+  clearTimeout(workoutSaveTimer);
+  workoutSaveTimer = null;
+  saveWorkoutLog(true, { debounced: true });
+}
+
+function saveWorkoutLog(silent = false, options = {}) {
+  console.time('saveWorkoutLog');
+  clearTimeout(workoutSaveTimer);
+  workoutSaveTimer = null;
   const workoutState = getWorkoutState();
   const workout = getTodayWorkout();
   const date = todayKey();
@@ -1646,12 +1717,13 @@ function saveWorkoutLog(silent = false) {
   dayLog.completed = workout.exercises.length > 0 && workout.exercises.every(exercise => dayLog.exercises[exercise.id]?.completed);
   workoutState.logs[date] = dayLog;
   workoutState.exerciseHistory = buildExerciseHistory(workoutState.logs);
-  updateXCoachMemoryFromWorkoutLog(dayLog);
+  if (!silent || options.updateMemory || dayLog.completed) updateXCoachMemoryFromWorkoutLog(dayLog);
   saveWorkoutState(workoutState);
   if (!silent) {
     showToast('Workout saved.');
     renderAll();
   }
+  console.timeEnd('saveWorkoutLog');
 }
 
 function buildExerciseHistory(logs) {
