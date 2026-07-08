@@ -3,6 +3,7 @@ let aiHistory = [];
 let startupCoachBriefShown = false;
 
 const COACH_NAME = 'X';
+const X_COACH_GREETING = "I'm X. I’ll track your calories, protein, water, and missed meals. No fake bulk.";
 const coachProfile = {
   name: 'Vinayak',
   goal: 'bulk / visible transformation',
@@ -20,9 +21,15 @@ const coachProfile = {
 function openAI() {
   document.getElementById('aiDrawer').classList.add('open');
   const messages = document.getElementById('aiMessages');
+  const oldMessageCached = /screw\s+up/i.test(messages.textContent);
 
-  if (!messages.hasChildNodes()) {
-    addCoachMessage("I'm X. I'll track your calories, protein, water, and missed meals. No fake bulk.");
+  if (oldMessageCached) {
+    messages.innerHTML = '';
+    aiHistory = [];
+  }
+
+  if (!messages.hasChildNodes() || oldMessageCached) {
+    addCoachMessage(X_COACH_GREETING);
   }
 
   setTimeout(() => document.getElementById('aiInput').focus(), 300);
@@ -295,6 +302,7 @@ function getFoodScanCoachNote(meal) {
 }
 
 function handleCoachQuickAction(action, detail = '') {
+  console.log('X quick action:', action);
   const map = {
     eat_now: () => getNextMealSuggestion(true, detail),
     judge_day: () => getEndOfDayReport(),
