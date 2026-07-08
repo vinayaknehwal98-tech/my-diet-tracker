@@ -242,7 +242,7 @@ function exposeGlobals() {
 
 
 // --- INIT ---
-console.log('Diet Tracker version: workout-brain-1');
+console.log("Diet Tracker version: workout-sets-1");
 exposeGlobals();
 renderAll();
 setTimeout(() => {

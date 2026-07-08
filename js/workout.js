@@ -1271,3 +1271,621 @@ function topEntries(obj) {
 function cleanMemoryName(name) {
   return String(name || '').replace(/^[^\w\s]*/, '').trim() || 'Unknown';
 }
+
+// --- SET-BY-SET WORKOUT LOGGING ---
+function workoutNumberOrBlank(value) {
+  if (value === '' || value === null || typeof value === 'undefined') return '';
+  const number = Number(value);
+  return Number.isFinite(number) ? number : '';
+}
+
+function workoutTextOrBlank(value) {
+  if (value === '' || value === null || typeof value === 'undefined') return '';
+  return String(value);
+}
+
+function normalizeSetRow(row = {}, index = 0) {
+  const weight = workoutNumberOrBlank(row.weight);
+  const reps = workoutTextOrBlank(row.reps);
+  const rir = workoutNumberOrBlank(row.rir);
+  const hasReps = reps !== '' && String(reps).trim() !== '0';
+  const hasWeight = weight !== '' && Number(weight) > 0;
+  return {
+    setNumber: Number(row.setNumber) || index + 1,
+    weight,
+    reps,
+    rir,
+    completed: !!row.completed || hasReps || hasWeight
+  };
+}
+
+function getDefaultSetRows(exercise) {
+  const target = parseSetRepTarget(exercise?.targetText || exercise?.repRange);
+  const count = Math.max(1, target.sets || exercise?.sets || 3);
+  return Array.from({ length: count }, (_, index) => ({
+    setNumber: index + 1,
+    weight: '',
+    reps: '',
+    rir: '',
+    completed: false
+  }));
+}
+
+function normalizeExerciseLog(log = {}, exercise = {}) {
+  const base = log || {};
+  let sets = [];
+  if (Array.isArray(base.sets) && base.sets.length) {
+    sets = base.sets.map(normalizeSetRow);
+  } else if (Array.isArray(base.reps) && base.reps.length) {
+    sets = base.reps.map((reps, index) => normalizeSetRow({
+      setNumber: index + 1,
+      weight: base.weight,
+      reps,
+      rir: base.rir,
+      completed: !!base.completed || Number(reps) > 0
+    }, index));
+  } else if (base.weight || base.rir || base.notes || base.completed) {
+    sets = getDefaultSetRows(exercise);
+    if (base.weight || base.rir) {
+      sets[0] = normalizeSetRow({
+        setNumber: 1,
+        weight: base.weight,
+        reps: '',
+        rir: base.rir,
+        completed: !!base.completed
+      }, 0);
+    }
+  } else {
+    sets = getDefaultSetRows(exercise);
+  }
+  sets = sets.map((row, index) => ({ ...normalizeSetRow(row, index), setNumber: index + 1 }));
+  return {
+    ...base,
+    sets,
+    rir: base.rir ?? null,
+    notes: base.notes || '',
+    completed: !!base.completed || isExerciseCompletedFromSets(sets),
+    timestamp: base.timestamp || new Date().toISOString()
+  };
+}
+
+function getSetNumericReps(row) {
+  const reps = Number(row?.reps);
+  return Number.isFinite(reps) && reps > 0 ? reps : 0;
+}
+
+function calculateSetBasedVolume(setRows = []) {
+  const rows = Array.isArray(setRows) ? setRows : [];
+  let volume = 0;
+  let hasWeightedSet = false;
+  rows.forEach(row => {
+    const weight = Number(row?.weight);
+    const reps = getSetNumericReps(row);
+    if (Number.isFinite(weight) && weight > 0 && reps > 0) {
+      hasWeightedSet = true;
+      volume += weight * reps;
+    }
+  });
+  return hasWeightedSet ? volume : null;
+}
+
+function getTotalRepsFromSets(setRows = []) {
+  return (Array.isArray(setRows) ? setRows : []).reduce((sum, row) => sum + getSetNumericReps(row), 0);
+}
+
+function isExerciseCompletedFromSets(setRows = []) {
+  return (Array.isArray(setRows) ? setRows : []).some(row => row?.completed || getSetNumericReps(row) > 0 || Number(row?.weight) > 0);
+}
+
+function getTopSet(setRows = []) {
+  const valid = (Array.isArray(setRows) ? setRows : [])
+    .map((row, index) => ({ ...row, setNumber: row.setNumber || index + 1, reps: getSetNumericReps(row), weight: Number(row.weight) || 0 }))
+    .filter(row => row.reps > 0 || row.weight > 0);
+  if (!valid.length) return null;
+  return valid.sort((a, b) => (b.weight - a.weight) || (b.reps - a.reps) || (a.setNumber - b.setNumber))[0];
+}
+
+function detectSetPattern(setRows = []) {
+  const rows = (Array.isArray(setRows) ? setRows : [])
+    .map(row => ({ weight: Number(row.weight) || 0, reps: getSetNumericReps(row) }))
+    .filter(row => row.reps > 0 || row.weight > 0);
+  if (rows.length < 2) return 'straight_sets';
+  const weights = rows.map(row => row.weight);
+  const weighted = weights.some(weight => weight > 0);
+  if (!weighted || weights.every(weight => weight === weights[0])) return 'straight_sets';
+  const nonIncreasing = weights.every((weight, index) => index === 0 || weight <= weights[index - 1]);
+  const nonDecreasing = weights.every((weight, index) => index === 0 || weight >= weights[index - 1]);
+  const topWeight = Math.max(...weights);
+  const topIndex = weights.indexOf(topWeight);
+  if (topIndex === 0 && weights.slice(1).some(weight => weight < topWeight)) {
+    const backoffSame = weights.slice(1).length > 1 && weights.slice(1).every(weight => weight === weights[1]);
+    return backoffSame ? 'top_set_backoff' : 'drop_sets';
+  }
+  if (nonIncreasing && weights[0] > weights[weights.length - 1]) return 'drop_sets';
+  if (nonDecreasing && weights[weights.length - 1] > weights[0]) return 'ramping';
+  if (topIndex > 0 && topIndex < weights.length - 1 && weights.slice(topIndex + 1).some(weight => weight < topWeight)) return 'top_set_backoff';
+  return 'mixed';
+}
+
+function getBackoffPerformance(setRows = []) {
+  const rows = (Array.isArray(setRows) ? setRows : []).map(normalizeSetRow);
+  const top = getTopSet(rows);
+  if (!top) return { sets: [], totalReps: 0, volume: null, summary: 'none' };
+  const backoff = rows.filter(row => (row.setNumber || 0) > top.setNumber && (getSetNumericReps(row) > 0 || Number(row.weight) > 0));
+  const volume = calculateSetBasedVolume(backoff);
+  const totalRepsValue = getTotalRepsFromSets(backoff);
+  return {
+    sets: backoff,
+    totalReps: totalRepsValue,
+    volume,
+    summary: backoff.length ? `${backoff.length} back-off set(s), ${totalRepsValue} reps${volume ? `, ${Math.round(volume)} volume` : ''}` : 'none'
+  };
+}
+
+function compareSetPerformance(current, previous) {
+  if (!current || !previous) return { improved: false, topImproved: false, backoffDropped: false, volumeDelta: 0, repsDelta: 0 };
+  const currentTop = getTopSet(current.sets || []);
+  const previousTop = getTopSet(previous.sets || []);
+  const currentBackoff = getBackoffPerformance(current.sets || []);
+  const previousBackoff = getBackoffPerformance(previous.sets || []);
+  const currentVolume = calculateSetBasedVolume(current.sets || []) || 0;
+  const previousVolume = calculateSetBasedVolume(previous.sets || []) || 0;
+  const repsDelta = getTotalRepsFromSets(current.sets || []) - getTotalRepsFromSets(previous.sets || []);
+  const topImproved = !!currentTop && !!previousTop && (
+    currentTop.weight > previousTop.weight ||
+    (currentTop.weight === previousTop.weight && currentTop.reps > previousTop.reps)
+  );
+  const backoffDropped = previousBackoff.totalReps > 0 && currentBackoff.totalReps < previousBackoff.totalReps;
+  return {
+    improved: topImproved || currentVolume > previousVolume || repsDelta > 0,
+    topImproved,
+    backoffDropped,
+    volumeDelta: currentVolume - previousVolume,
+    repsDelta
+  };
+}
+
+function calculateVolume(weight, repsArray) {
+  if (Array.isArray(weight)) return calculateSetBasedVolume(weight) || 0;
+  return (Number(weight) || 0) * (Array.isArray(repsArray) ? repsArray.reduce((sum, reps) => sum + (Number(reps) || 0), 0) : 0);
+}
+
+function totalReps(log) {
+  if (log?.sets) return getTotalRepsFromSets(log.sets);
+  return (log?.reps || []).reduce((sum, reps) => sum + (Number(reps) || 0), 0);
+}
+
+function getExerciseSetData(exerciseId) {
+  const exercise = findExerciseById(exerciseId) || { id: exerciseId, name: exerciseId };
+  const count = Number(document.getElementById(`wo_set_count_${exerciseId}`)?.value) || getDefaultSetRows(exercise).length;
+  return Array.from({ length: count }, (_, index) => normalizeSetRow({
+    setNumber: index + 1,
+    weight: document.getElementById(`wo_set_weight_${exerciseId}_${index}`)?.value ?? '',
+    reps: document.getElementById(`wo_set_reps_${exerciseId}_${index}`)?.value ?? '',
+    rir: document.getElementById(`wo_set_rir_${exerciseId}_${index}`)?.value ?? '',
+    completed: !!document.getElementById(`wo_set_done_${exerciseId}_${index}`)?.checked
+  }, index));
+}
+
+function saveWorkoutSetRows(exerciseId, setRows) {
+  const workoutState = getWorkoutState();
+  const workout = getTodayWorkout();
+  const date = todayKey();
+  const dayLog = workoutState.logs[date] || createEmptyWorkoutLog(workout);
+  dayLog.workoutId = workout.id;
+  dayLog.workoutName = workout.name;
+  dayLog.dayName = workout.day;
+  dayLog.exercises = dayLog.exercises || {};
+  const exercise = findExerciseById(exerciseId) || { id: exerciseId };
+  const previous = normalizeExerciseLog(dayLog.exercises[exerciseId] || dayLog.exercises[workoutId(exerciseId)] || {}, exercise);
+  const normalized = normalizeExerciseLog({ ...previous, sets: setRows }, exercise);
+  dayLog.exercises[exercise.id || exerciseId] = normalized;
+  workoutState.logs[date] = dayLog;
+  workoutState.exerciseHistory = buildExerciseHistory(workoutState.logs);
+  saveWorkoutState(workoutState);
+}
+
+function addSetRow(exerciseId) {
+  saveWorkoutLog(true);
+  const exercise = findExerciseById(exerciseId) || { id: exerciseId };
+  const log = normalizeExerciseLog(getWorkoutLog().exercises[exercise.id] || {}, exercise);
+  const last = log.sets[log.sets.length - 1] || {};
+  log.sets.push(normalizeSetRow({ ...last, setNumber: log.sets.length + 1, completed: false }, log.sets.length));
+  saveWorkoutSetRows(exercise.id, log.sets);
+  renderAll();
+}
+
+function removeLastSetRow(exerciseId) {
+  saveWorkoutLog(true);
+  const exercise = findExerciseById(exerciseId) || { id: exerciseId };
+  const log = normalizeExerciseLog(getWorkoutLog().exercises[exercise.id] || {}, exercise);
+  if (log.sets.length <= 1) return;
+  log.sets.pop();
+  saveWorkoutSetRows(exercise.id, log.sets);
+  renderAll();
+}
+
+function copyPreviousSet(exerciseId, setIndex) {
+  const previousIndex = Number(setIndex) - 1;
+  if (previousIndex < 0) return;
+  ['weight', 'reps', 'rir'].forEach(field => {
+    const previous = document.getElementById(`wo_set_${field}_${exerciseId}_${previousIndex}`);
+    const current = document.getElementById(`wo_set_${field}_${exerciseId}_${setIndex}`);
+    if (previous && current) current.value = previous.value;
+  });
+  const done = document.getElementById(`wo_set_done_${exerciseId}_${setIndex}`);
+  if (done) done.checked = true;
+  saveWorkoutLog(true);
+}
+
+function updateSetField(exerciseId, setIndex, field, value) {
+  const input = document.getElementById(`wo_set_${field}_${exerciseId}_${setIndex}`);
+  if (input && input.value !== String(value ?? '')) input.value = value;
+  saveWorkoutLog(true);
+}
+
+function applyWeightToAllSets(exerciseId) {
+  const firstWeight = document.getElementById(`wo_set_weight_${exerciseId}_0`)?.value || '';
+  const weight = prompt('Use what weight for all sets?', firstWeight);
+  if (weight === null) return;
+  const count = Number(document.getElementById(`wo_set_count_${exerciseId}`)?.value) || 0;
+  for (let index = 0; index < count; index++) {
+    const input = document.getElementById(`wo_set_weight_${exerciseId}_${index}`);
+    if (input) input.value = weight;
+  }
+  saveWorkoutLog(true);
+}
+
+function applyTemplateFromLastSession(exerciseId) {
+  const exercise = findExerciseById(exerciseId) || { id: exerciseId };
+  const last = getLastExercisePerformance(exercise.id);
+  if (!last?.sets?.length) {
+    showToast('No previous sets for this exercise yet.');
+    return;
+  }
+  const count = Number(document.getElementById(`wo_set_count_${exerciseId}`)?.value) || last.sets.length;
+  for (let index = 0; index < count; index++) {
+    const lastSet = last.sets[index] || last.sets[last.sets.length - 1];
+    const repsInput = document.getElementById(`wo_set_reps_${exerciseId}_${index}`);
+    const weightInput = document.getElementById(`wo_set_weight_${exerciseId}_${index}`);
+    if (repsInput && lastSet?.reps !== undefined) repsInput.value = lastSet.reps;
+    if (weightInput && lastSet?.weight !== undefined) weightInput.value = lastSet.weight;
+  }
+  saveWorkoutLog(true);
+}
+
+function renderExerciseSetRows(exercise, setRows) {
+  const id = exercise.id;
+  const rows = (setRows || getDefaultSetRows(exercise)).map(normalizeSetRow);
+  return `
+    <input type="hidden" id="wo_set_count_${id}" value="${rows.length}">
+    <div class="exercise-set-list" role="group" aria-label="${escapeWorkoutHtml(exercise.name)} sets">
+      <div class="exercise-set-row exercise-set-header">
+        <div class="set-cell">Set</div>
+        <div class="set-cell">Weight</div>
+        <div class="set-cell">Reps</div>
+        <div class="set-cell">RIR</div>
+        <div class="set-cell">Done</div>
+        <div class="set-cell"></div>
+      </div>
+      ${rows.map((row, index) => `
+        <div class="exercise-set-row">
+          <div class="set-cell"><span class="set-number-badge">${index + 1}</span></div>
+          <label class="set-cell"><span>Weight</span><input type="number" inputmode="decimal" step="0.5" id="wo_set_weight_${id}_${index}" value="${escapeWorkoutHtml(row.weight)}" placeholder="kg" oninput="updateSetField('${id}', ${index}, 'weight', this.value)"></label>
+          <label class="set-cell"><span>Reps</span><input type="text" inputmode="decimal" id="wo_set_reps_${id}_${index}" value="${escapeWorkoutHtml(row.reps)}" placeholder="${placeholderForExercise(exercise).split(',')[index] || ''}" oninput="updateSetField('${id}', ${index}, 'reps', this.value)"></label>
+          <label class="set-cell"><span>RIR</span><input type="number" inputmode="numeric" id="wo_set_rir_${id}_${index}" value="${escapeWorkoutHtml(row.rir)}" placeholder="2" oninput="updateSetField('${id}', ${index}, 'rir', this.value)"></label>
+          <label class="set-cell set-done-cell"><span>Done</span><input type="checkbox" id="wo_set_done_${id}_${index}" ${row.completed ? 'checked' : ''} onchange="saveWorkoutLog(true)"></label>
+          <div class="set-cell"><button class="copy-set-btn" type="button" onclick="copyPreviousSet('${id}', ${index})" ${index === 0 ? 'disabled' : ''}>Copy</button></div>
+        </div>`).join('')}
+    </div>
+    <div class="set-actions">
+      <button class="add-set-btn" type="button" onclick="addSetRow('${id}')">Add Set</button>
+      <button class="remove-set-btn" type="button" onclick="removeLastSetRow('${id}')">Remove Last Set</button>
+      <button class="copy-set-btn" type="button" onclick="applyWeightToAllSets('${id}')">Fill Same Weight</button>
+      <button class="copy-set-btn" type="button" onclick="applyTemplateFromLastSession('${id}')">Fill Reps From Last</button>
+    </div>`;
+}
+
+function renderWorkoutExercise(exercise, index) {
+  const todayLog = normalizeExerciseLog(getWorkoutLog().exercises[exercise.id] || {}, exercise);
+  const history = getExerciseHistory(exercise.id);
+  const last = getLastExercisePerformance(exercise.id);
+  const suggestion = getProgressiveOverloadSuggestion(exercise, history);
+  const pr = detectPersonalRecord(exercise, todayLog, history);
+  return `
+    <article class="workout-card ${todayLog.completed ? 'complete' : ''}">
+      <div class="workout-card-head">
+        <div>
+          <div class="workout-ex-num">${index + 1}</div>
+          <h3>${escapeWorkoutHtml(exercise.name)}</h3>
+          <p>${escapeWorkoutHtml(exercise.targetText)}</p>
+        </div>
+        <label class="workout-done">
+          <input type="checkbox" id="wo_done_${exercise.id}" ${todayLog.completed ? 'checked' : ''} onchange="saveWorkoutLog(true)">
+          <span>Done</span>
+        </label>
+      </div>
+      <div class="workout-meta-row">
+        <span>Last: ${last ? escapeWorkoutHtml(formatWorkoutPerformance(last)) : 'No history yet'}</span>
+        <span class="workout-progression">${escapeWorkoutHtml(formatOverloadSuggestion(suggestion))}</span>
+      </div>
+      <div class="workout-badges">
+        ${pr.map(label => `<span class="pr-badge">${escapeWorkoutHtml(label)}</span>`).join('') || `<span class="progression-badge">${escapeWorkoutHtml(detectSetPattern(todayLog.sets))}</span>`}
+      </div>
+      ${renderExerciseSetRows(exercise, todayLog.sets)}
+      <textarea class="workout-notes" id="wo_notes_${exercise.id}" placeholder="Notes, form cues, machine setting..." oninput="saveWorkoutLog(true)">${escapeWorkoutHtml(todayLog.notes || '')}</textarea>
+    </article>`;
+}
+
+function saveWorkoutLog(silent = false) {
+  const workoutState = getWorkoutState();
+  const workout = getTodayWorkout();
+  const date = todayKey();
+  const dayLog = workoutState.logs[date] || createEmptyWorkoutLog(workout);
+  dayLog.workoutId = workout.id;
+  dayLog.workoutName = workout.name;
+  dayLog.dayName = workout.day;
+  dayLog.exercises = dayLog.exercises || {};
+
+  workout.exercises.forEach(exercise => {
+    const previous = normalizeExerciseLog(dayLog.exercises[exercise.id] || {}, exercise);
+    const sets = getExerciseSetData(exercise.id);
+    const notes = document.getElementById(`wo_notes_${exercise.id}`)?.value ?? previous.notes ?? '';
+    const manualCompleted = !!document.getElementById(`wo_done_${exercise.id}`)?.checked;
+    const completed = manualCompleted || isExerciseCompletedFromSets(sets);
+    const numericRirs = sets.map(row => Number(row.rir)).filter(Number.isFinite);
+    dayLog.exercises[exercise.id] = {
+      sets,
+      rir: numericRirs.length ? Math.round((numericRirs.reduce((sum, value) => sum + value, 0) / numericRirs.length) * 10) / 10 : null,
+      notes,
+      completed,
+      timestamp: new Date().toISOString()
+    };
+  });
+
+  dayLog.completed = workout.exercises.length > 0 && workout.exercises.every(exercise => dayLog.exercises[exercise.id]?.completed);
+  workoutState.logs[date] = dayLog;
+  workoutState.exerciseHistory = buildExerciseHistory(workoutState.logs);
+  updateXCoachMemoryFromWorkoutLog(dayLog);
+  saveWorkoutState(workoutState);
+  if (!silent) {
+    showToast('Workout saved.');
+    renderAll();
+  }
+}
+
+function buildExerciseHistory(logs) {
+  const history = {};
+  Object.entries(logs || {}).forEach(([date, dayLog]) => {
+    Object.entries(dayLog.exercises || {}).forEach(([exerciseId, log]) => {
+      const exercise = findExerciseById(exerciseId) || { id: exerciseId, name: humanizeWorkoutId(exerciseId) };
+      const normalized = normalizeExerciseLog(log, exercise);
+      if (!normalized.completed && !isExerciseCompletedFromSets(normalized.sets)) return;
+      const id = workoutId(exerciseId);
+      const topSet = getTopSet(normalized.sets);
+      const pattern = detectSetPattern(normalized.sets);
+      const volume = calculateSetBasedVolume(normalized.sets);
+      if (!history[id]) history[id] = [];
+      history[id].push({
+        date,
+        exerciseId: id,
+        workoutName: dayLog.workoutName,
+        weight: topSet?.weight || 0,
+        reps: normalized.sets.map(row => getSetNumericReps(row)).filter(Boolean),
+        sets: normalized.sets,
+        rir: normalized.rir,
+        notes: normalized.notes || '',
+        completed: normalized.completed,
+        timestamp: normalized.timestamp || date,
+        topSet,
+        backoffPerformance: getBackoffPerformance(normalized.sets),
+        totalReps: getTotalRepsFromSets(normalized.sets),
+        totalVolume: volume,
+        volume: volume || 0,
+        pattern
+      });
+    });
+  });
+  Object.keys(history).forEach(id => history[id].sort((a, b) => String(b.date).localeCompare(String(a.date))));
+  return history;
+}
+
+function getPreviousWorkoutVolume(workoutIdValue) {
+  const entries = Object.entries(getWorkoutState().logs || {})
+    .filter(([date, log]) => date !== todayKey() && log.workoutId === workoutIdValue)
+    .sort((a, b) => String(b[0]).localeCompare(String(a[0])));
+  if (!entries.length) return 0;
+  return Object.entries(entries[0][1].exercises || {}).reduce((sum, [exerciseId, item]) => {
+    const exercise = findExerciseById(exerciseId) || { id: exerciseId };
+    return sum + (calculateSetBasedVolume(normalizeExerciseLog(item, exercise).sets) || 0);
+  }, 0);
+}
+
+function getTodayWorkoutStatus() {
+  const workout = getTodayWorkout();
+  const log = getWorkoutLog();
+  const normalizedLogs = {};
+  workout.exercises.forEach(exercise => {
+    normalizedLogs[exercise.id] = normalizeExerciseLog(log.exercises?.[exercise.id] || {}, exercise);
+  });
+  const completed = Object.values(normalizedLogs).filter(item => item.completed).length;
+  const total = workout.exercises.length;
+  const currentVolume = Object.values(normalizedLogs).reduce((sum, item) => sum + (calculateSetBasedVolume(item.sets) || 0), 0);
+  const lastWorkoutVolume = getPreviousWorkoutVolume(workout.id);
+  return {
+    workout,
+    completed,
+    total,
+    completionPercent: total ? Math.round((completed / total) * 100) : 100,
+    completedExercises: completed,
+    pendingExercises: workout.exercises.filter(exercise => !normalizedLogs[exercise.id]?.completed),
+    dayLog: { ...log, exercises: normalizedLogs },
+    completedWorkout: total > 0 && completed === total,
+    currentVolume,
+    lastWorkoutVolume,
+    volumeDelta: currentVolume - lastWorkoutVolume,
+    priorityLift: getPriorityLift(workout)
+  };
+}
+
+function formatWorkoutPerformance(log) {
+  const exercise = findExerciseById(log?.exerciseId || '') || {};
+  const normalized = normalizeExerciseLog(log, exercise);
+  const top = getTopSet(normalized.sets);
+  const volume = calculateSetBasedVolume(normalized.sets);
+  const pattern = detectSetPattern(normalized.sets).replace(/_/g, ' ');
+  const topText = top ? `Top ${trimNumber(top.weight)}kg x ${top.reps}` : 'No top set';
+  return `${topText} | ${getTotalRepsFromSets(normalized.sets)} reps${volume ? ` | ${Math.round(volume)} volume` : ''} | ${pattern}${normalized.rir != null ? ` | RIR ${normalized.rir}` : ''}`;
+}
+
+function getProgressiveOverloadSuggestion(exercise, history, todayContext = {}) {
+  const sessions = (history || []).filter(item => item.date !== todayKey()).slice(0, 4);
+  const last = sessions[0];
+  const previous = sessions[1];
+  const target = parseSetRepTarget(exercise.targetText || exercise.repRange);
+  const recovery = { ...getDietRecoveryContext(), ...todayContext };
+  if (!last || !last.sets?.length) {
+    return overloadDecision('Baseline', 'No previous set data.', 'Use a controllable weight inside target range. Log every set.', '', 'Baseline');
+  }
+
+  const normalizedLast = normalizeExerciseLog(last, exercise);
+  const setRows = normalizedLast.sets;
+  const reps = setRows.map(getSetNumericReps).filter(Boolean);
+  const topSet = getTopSet(setRows);
+  const pattern = detectSetPattern(setRows);
+  const notes = String(normalizedLast.notes || '');
+  const pain = hasPainNotes(notes);
+  const fatigue = hasFatigueNotes(notes);
+  const rirValues = setRows.map(row => Number(row.rir)).filter(Number.isFinite);
+  const avgRir = rirValues.length ? rirValues.reduce((sum, value) => sum + value, 0) / rirValues.length : null;
+  const dropOff = hasBigSetDropOff(reps);
+  const totalVolumeValue = calculateSetBasedVolume(setRows) || 0;
+  const comparison = previous ? compareSetPerformance(normalizedLast, normalizeExerciseLog(previous, exercise)) : null;
+  const topHit = target.max && reps.length >= (target.sets || exercise.sets || reps.length) && reps.slice(0, target.sets || reps.length).every(rep => rep >= target.max);
+  const belowMin = target.min && reps.some(rep => rep < target.min);
+  const plateau = isPlateaued(sessions);
+  const deload = isDeloadPattern(sessions);
+
+  if (recovery.underfed) return overloadDecision('Recovery limited', 'Underfed today.', "Match last session. Eat carbs + protein before training.", 'Fuel first. No PR chase.', 'Recovery limited');
+  if (pain) return overloadDecision(fatigue ? 'Deload' : 'Form focus', 'Pain noted.', 'Reduce load 10-15%, improve form, or swap exercise.', 'Do not chase PR.', 'Pain flag');
+  if (deload) return overloadDecision('Deload', 'Performance drop/fatigue pattern.', 'Reduce load 10-15% and rebuild clean reps.', 'Deload before reps get ugly.', 'Deload');
+  if (comparison?.topImproved && comparison?.backoffDropped) {
+    return overloadDecision('Mixed progress', 'Top set improved, but back-off quality dropped.', 'Keep load similar and improve back-off consistency before adding more.', '', 'Mixed progress');
+  }
+  if (pattern === 'drop_sets') {
+    return overloadDecision('Maintain', 'Drop-set pattern detected.', 'Do not judge this like straight sets. Keep top set similar and improve back-off control.', '', 'Drop sets');
+  }
+  if (pattern === 'top_set_backoff') {
+    return overloadDecision('Maintain', 'Top set plus back-off pattern.', 'Progress the top set slowly, then protect back-off reps and rest time.', '', 'Top set/back-off');
+  }
+  if (pattern === 'ramping') {
+    return overloadDecision('Form focus', 'Ramping sets detected.', 'Use ramping as warm-up/skill work. Judge overload from the heaviest clean top set.', '', 'Ramping');
+  }
+  if (plateau) return overloadDecision('Plateau', 'No meaningful set-volume improvement for 3 sessions.', choosePlateauTarget(exercise, recovery), '', 'Plateau');
+  if (belowMin) return overloadDecision('Reduce', `Current load is too heavy for target ${target.min}-${target.max}.`, 'Reduce weight slightly and hit clean minimum reps.', '', 'Reduce');
+  if (dropOff) return overloadDecision('Maintain', 'Big set drop-off.', 'Same weight, longer rest, match clean reps first. Reduce load if reps keep crashing.', '', 'Maintain');
+  if (avgRir !== null && avgRir <= 0) return overloadDecision('Maintain', 'Too close to failure.', 'Same weight, leave 1-2 reps in reserve.', '', 'Maintain');
+  if (comparison && comparison.repsDelta < 0 && comparison.volumeDelta <= 0) return overloadDecision('Maintain', 'Total reps/volume dropped from last time.', 'Match last session before progressing.', '', 'Maintain');
+  if (topHit && (avgRir === null || (avgRir >= 1 && avgRir <= 3))) {
+    const next = isCompoundExercise(exercise.name) && topSet?.weight
+      ? `${trimNumber(topSet.weight + 2.5)}kg to ${trimNumber(topSet.weight + 5)}kg for ${exercise.repRange} reps`
+      : `${topSet?.weight ? trimNumber(topSet.weight) + 'kg' : 'same load'} with cleaner reps/tempo, or the smallest weight jump`;
+    return overloadDecision('Add weight', `All working sets were inside/top of range. Volume: ${Math.round(totalVolumeValue)}.`, `Try ${next}.`, '', 'Add weight');
+  }
+  if (avgRir !== null && avgRir >= 4 && reps.every(rep => !target.min || rep >= target.min)) {
+    const status = isCompoundExercise(exercise.name) ? 'Add weight' : 'Form focus';
+    return overloadDecision(status, 'Too easy across set rows.', isCompoundExercise(exercise.name) ? 'Increase slightly while staying inside the target range.' : 'Use slower tempo or the smallest possible jump.', '', status);
+  }
+
+  const nextRows = setRows.map(row => ({ ...row }));
+  const workingRows = nextRows.filter(row => getSetNumericReps(row) > 0);
+  const weakest = workingRows.sort((a, b) => getSetNumericReps(a) - getSetNumericReps(b))[0];
+  if (weakest) weakest.reps = getSetNumericReps(weakest) + 1;
+  const targetLine = nextRows.map(row => `${row.weight ? trimNumber(row.weight) + 'kg ' : ''}x ${row.reps || '-'}`).join(', ');
+  return overloadDecision('Add reps', 'Performance is stable inside the set pattern.', `${targetLine}. Add only 1 total rep.`, '', 'Add reps');
+}
+
+function detectPersonalRecord(exercise, currentLog, history) {
+  const normalized = normalizeExerciseLog(currentLog, exercise);
+  if (!isExerciseCompletedFromSets(normalized.sets)) return [];
+  const past = (history || []).filter(item => item.date !== todayKey());
+  if (!past.length) return [];
+  const currentTop = getTopSet(normalized.sets);
+  const currentVolume = calculateSetBasedVolume(normalized.sets) || 0;
+  const currentReps = getTotalRepsFromSets(normalized.sets);
+  const currentE1rm = currentTop ? estimatedStrength(currentTop.weight, currentTop.reps) : 0;
+  const maxWeight = Math.max(...past.map(item => getTopSet(item.sets || [])?.weight || Number(item.weight) || 0), 0);
+  const maxVolume = Math.max(...past.map(item => calculateSetBasedVolume(item.sets || []) || calculateVolume(item.weight, item.reps)), 0);
+  const maxE1rm = Math.max(...past.map(item => {
+    const top = getTopSet(item.sets || []);
+    return top ? estimatedStrength(top.weight, top.reps) : estimatedStrength(item.weight, Math.max(...(item.reps || [0])));
+  }), 0);
+  const sameWeightBestReps = currentTop ? Math.max(...past
+    .filter(item => (getTopSet(item.sets || [])?.weight || Number(item.weight) || 0) === currentTop.weight)
+    .map(item => getTotalRepsFromSets(item.sets || []) || totalReps(item)), 0) : 0;
+  const badges = [];
+  if (currentVolume > maxVolume) badges.push('Volume PR');
+  if (currentTop?.weight > maxWeight) badges.push('Weight PR');
+  if (currentTop?.weight && currentReps > sameWeightBestReps && sameWeightBestReps > 0) badges.push('Rep PR');
+  if (currentE1rm > maxE1rm) badges.push('Estimated strength PR');
+  if (badges.length && hasPainNotes(normalized.notes)) badges.push('PR with pain - repeat only when form is clean');
+  return badges;
+}
+
+function isPlateaued(sessions) {
+  if (!sessions || sessions.length < 3) return false;
+  const volumes = sessions.slice(0, 3).map(item => calculateSetBasedVolume(normalizeExerciseLog(item).sets) || calculateVolume(item.weight, item.reps));
+  const best = Math.max(...volumes);
+  const worst = Math.min(...volumes);
+  return best > 0 && (best - worst) / best < 0.03;
+}
+
+function isDeloadPattern(sessions) {
+  if (!sessions || sessions.length < 3) return false;
+  const volumes = sessions.slice(0, 3).map(item => calculateSetBasedVolume(normalizeExerciseLog(item).sets) || calculateVolume(item.weight, item.reps));
+  const painOrFatigue = sessions.slice(0, 3).filter(item => hasPainNotes(item.notes) || hasFatigueNotes(item.notes)).length;
+  return (volumes[0] < volumes[1] && volumes[1] < volumes[2]) || painOrFatigue >= 2;
+}
+
+function getWorkoutCoachContext() {
+  const status = getTodayWorkoutStatus();
+  const workout = status.workout;
+  const priority = status.priorityLift;
+  const memorySummary = getUserLearningSummary();
+  const priorityLast = priority ? getLastExercisePerformance(priority.id) : null;
+  const priorityPrevious = priority ? getExerciseHistory(priority.id).filter(item => item.date !== todayKey())[1] : null;
+  const priorityComparison = priorityLast && priorityPrevious ? compareSetPerformance(priorityLast, priorityPrevious) : null;
+  return {
+    todayWorkout: workout,
+    focus: workout.focus,
+    exercisesCompleted: `${status.completed}/${status.total}`,
+    pendingExercises: status.pendingExercises.map(exercise => exercise.name),
+    priorityLift: priority ? priority.name : 'none',
+    lastPerformance: priorityLast,
+    setPattern: priorityLast ? priorityLast.pattern || detectSetPattern(priorityLast.sets || []) : 'none',
+    topSet: priorityLast ? priorityLast.topSet || getTopSet(priorityLast.sets || []) : null,
+    backoffPerformance: priorityLast ? priorityLast.backoffPerformance || getBackoffPerformance(priorityLast.sets || []) : null,
+    totalVolume: priorityLast ? priorityLast.totalVolume ?? calculateSetBasedVolume(priorityLast.sets || []) : null,
+    totalReps: priorityLast ? priorityLast.totalReps ?? getTotalRepsFromSets(priorityLast.sets || []) : 0,
+    improvedVsLast: priorityComparison ? priorityComparison.improved : false,
+    performanceComparison: priorityComparison,
+    progressiveOverloadSuggestions: (workout.exercises || []).slice(0, 5).map(exercise => {
+      const exerciseHistory = getExerciseHistory(exercise.id);
+      const last = exerciseHistory.find(item => item.date !== todayKey());
+      const previous = exerciseHistory.filter(item => item.date !== todayKey())[1];
+      return {
+        exercise: exercise.name,
+        suggestion: getProgressiveOverloadSuggestion(exercise, exerciseHistory),
+        setPattern: last ? last.pattern || detectSetPattern(last.sets || []) : 'none',
+        topSet: last ? last.topSet || getTopSet(last.sets || []) : null,
+        backoffPerformance: last ? last.backoffPerformance || getBackoffPerformance(last.sets || []) : null,
+        totalVolume: last ? last.totalVolume ?? calculateSetBasedVolume(last.sets || []) : null,
+        totalReps: last ? last.totalReps ?? getTotalRepsFromSets(last.sets || []) : 0,
+        improvedVsLast: last && previous ? compareSetPerformance(last, previous).improved : false
+      };
+    }),
+    weeklyWorkoutConsistency: getWorkoutWeeklyReview(),
+    memorySummary,
+    learnedPatterns: inferUserPatterns()
+  };
+}

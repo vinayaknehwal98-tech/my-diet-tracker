@@ -52,6 +52,8 @@ function renderExport() {
 ['Sheet 4 — Missed Reasons', 'Meals you missed and the reason why'],
 ['Sheet 5 — Weight Log', 'Daily weight entries and progress'],
 ['Sheet 6 — Weekly Summary', 'Per-week totals, averages, perfect days, consistency %'],
+['Sheet 7 - Workout Logs', 'Every workout set with weight, reps, RIR, completion, pattern, and volume contribution'],
+['Sheet 8 - Exercise History', 'Top set, total reps, total volume, and set pattern per exercise session'],
         ].map(([title, desc]) => `
           <div style="display:flex;gap:10px;margin-bottom:8px;align-items:flex-start;">
             <div style="width:8px;height:8px;background:var(--accent);border-radius:50%;margin-top:4px;flex-shrink:0;"></div>
@@ -84,6 +86,78 @@ function renderExport() {
         All data stored on your device · Export anytime to review progress
       </div>
     </div>`;
+}
+
+function getWorkoutExportRows() {
+  const rows = [['Date','Day','Workout','Exercise','Set #','Weight','Reps','RIR','Completed','Pattern','Exercise Notes','Volume Contribution']];
+  if (typeof getWorkoutState !== 'function' || typeof normalizeExerciseLog !== 'function') {
+    rows.push(['Workout tracker unavailable','','','','','','','','','','','']);
+    return rows;
+  }
+  const workoutState = getWorkoutState();
+  Object.entries(workoutState.logs || {}).sort(([a], [b]) => String(a).localeCompare(String(b))).forEach(([date, dayLog]) => {
+    Object.entries(dayLog.exercises || {}).forEach(([exerciseId, log]) => {
+      const exercise = typeof findExerciseById === 'function'
+        ? (findExerciseById(exerciseId) || { id: exerciseId, name: exerciseId })
+        : { id: exerciseId, name: exerciseId };
+      const normalized = normalizeExerciseLog(log, exercise);
+      const pattern = typeof detectSetPattern === 'function' ? detectSetPattern(normalized.sets) : '';
+      normalized.sets.forEach((set, index) => {
+        const weight = Number(set.weight);
+        const reps = Number(set.reps);
+        rows.push([
+          date,
+          dayLog.dayName || '',
+          dayLog.workoutName || '',
+          exercise.name || exerciseId,
+          set.setNumber || index + 1,
+          set.weight === '' ? '' : set.weight,
+          set.reps === '' ? '' : set.reps,
+          set.rir === '' ? '' : set.rir,
+          set.completed ? 'Yes' : 'No',
+          pattern,
+          normalized.notes || '',
+          Number.isFinite(weight) && Number.isFinite(reps) ? weight * reps : ''
+        ]);
+      });
+    });
+  });
+  if (rows.length === 1) rows.push(['No workout logs yet','','','','','','','','','','','']);
+  return rows;
+}
+
+function getExerciseHistoryExportRows() {
+  const rows = [['Date','Exercise','Workout','Top Set','Total Reps','Total Volume','Pattern','Completed','Notes']];
+  if (typeof getWorkoutState !== 'function' || typeof normalizeExerciseLog !== 'function') {
+    rows.push(['Workout tracker unavailable','','','','','','','','']);
+    return rows;
+  }
+  const workoutState = getWorkoutState();
+  Object.entries(workoutState.exerciseHistory || {}).forEach(([exerciseId, entries]) => {
+    (entries || []).forEach(entry => {
+      const exercise = typeof findExerciseById === 'function'
+        ? (findExerciseById(exerciseId) || { id: exerciseId, name: exerciseId })
+        : { id: exerciseId, name: exerciseId };
+      const normalized = normalizeExerciseLog(entry, exercise);
+      const top = typeof getTopSet === 'function' ? getTopSet(normalized.sets) : null;
+      const totalReps = typeof getTotalRepsFromSets === 'function' ? getTotalRepsFromSets(normalized.sets) : '';
+      const totalVolume = typeof calculateSetBasedVolume === 'function' ? calculateSetBasedVolume(normalized.sets) : '';
+      const pattern = typeof detectSetPattern === 'function' ? detectSetPattern(normalized.sets) : '';
+      rows.push([
+        entry.date || '',
+        exercise.name || exerciseId,
+        entry.workoutName || '',
+        top ? `${top.weight || 0} x ${top.reps || 0}` : '',
+        totalReps,
+        totalVolume ?? '',
+        pattern,
+        normalized.completed ? 'Yes' : 'No',
+        normalized.notes || ''
+      ]);
+    });
+  });
+  if (rows.length === 1) rows.push(['No exercise history yet','','','','','','','','']);
+  return rows;
 }
 
 function exportToExcel() {
@@ -213,6 +287,9 @@ state.weightHistory.forEach(entry => {
     ]);
   });
 
+  const workoutLogRows = getWorkoutExportRows();
+  const exerciseHistoryRows = getExerciseHistoryExportRows();
+
   // Build XLSX using SheetJS via CDN
   const script = document.createElement('script');
   script.src = 'https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js';
@@ -231,6 +308,8 @@ const ws3 = styleSheet(XLSX.utils.aoa_to_sheet(waterRows));
 const ws4 = styleSheet(XLSX.utils.aoa_to_sheet(missedMealRows));
 const ws5 = styleSheet(XLSX.utils.aoa_to_sheet(weightRows));
 const ws6 = styleSheet(XLSX.utils.aoa_to_sheet(weekSummaryRows));
+const ws7 = styleSheet(XLSX.utils.aoa_to_sheet(workoutLogRows));
+const ws8 = styleSheet(XLSX.utils.aoa_to_sheet(exerciseHistoryRows));
 
 XLSX.utils.book_append_sheet(wb, ws1, 'Daily Log');
 XLSX.utils.book_append_sheet(wb, ws2, 'Meal Details');
@@ -238,6 +317,8 @@ XLSX.utils.book_append_sheet(wb, ws3, 'Water Log');
 XLSX.utils.book_append_sheet(wb, ws4, 'Missed Reasons');
 XLSX.utils.book_append_sheet(wb, ws5, 'Weight Log');
 XLSX.utils.book_append_sheet(wb, ws6, 'Weekly Summary');
+XLSX.utils.book_append_sheet(wb, ws7, 'Workout Logs');
+XLSX.utils.book_append_sheet(wb, ws8, 'Exercise History');
 
 
     const date = new Date().toLocaleDateString('en-IN').replace(/\//g,'-');
