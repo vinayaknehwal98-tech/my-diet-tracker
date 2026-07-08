@@ -169,6 +169,7 @@ function exposeGlobals() {
     getRemainingMacros,
     getMealConsistency,
     getNextMealSuggestion,
+    getHungerSuggestion,
     getMissedMealRecovery,
     getEndOfDayReport,
     getWeeklyCoachReview,
@@ -198,7 +199,7 @@ function exposeGlobals() {
 
 
 // --- INIT ---
-console.log('Diet Tracker version: x-coach-time-accuracy-1');
+console.log('Diet Tracker version: x-coach-hunger-mode-1');
 exposeGlobals();
 renderAll();
 setTimeout(() => {
