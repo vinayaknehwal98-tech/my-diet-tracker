@@ -488,25 +488,93 @@ function getBulkRescuePlan(detail = '') {
   return `${COACH_NAME}: Bulk Rescue Mode. You're ${ctx.remaining.kcal} kcal and ${ctx.remaining.protein}g protein short. Do this:\n1. ${plan[0]}\n2. ${plan[1]}\n3. ${plan[2]}\nThis is the minimum rescue. Don't sleep under target.`;
 }
 
+function hasWorkoutCoach() {
+  return typeof getWorkoutCoachContext === 'function'
+    && typeof getTodayWorkoutStatus === 'function'
+    && typeof getWorkoutWeeklyReview === 'function';
+}
+
+function getWorkoutStartupLine() {
+  if (!hasWorkoutCoach()) return '';
+  const status = getTodayWorkoutStatus();
+  const workout = status.workout;
+  if (workout.rest) return 'Rest day. Eat properly and recover.';
+  if (status.completedWorkout) return 'Workout logged. Now recover and hit protein.';
+  return `Workout pending: ${cleanMealName(workout.name)}.`;
+}
+
+function getWorkoutTodayResponse() {
+  if (!hasWorkoutCoach()) return `${COACH_NAME}: Workout tracker is not loaded yet.`;
+  const status = getTodayWorkoutStatus();
+  const workout = status.workout;
+  if (workout.rest) return `${COACH_NAME}: Rest day. Recovery, food, sleep, weight tracking. No punishment volume.`;
+  const priority = status.priorityLift;
+  const focus = workout.focus ? ` - ${workout.focus}` : '';
+  const firstGoal = priority ? ` Priority lift: ${priority.name}. First goal: match last session, then add 1 rep.` : '';
+  return `${COACH_NAME}: Today is ${workout.name}${focus}.${firstGoal}`;
+}
+
+function getWorkoutProgressiveOverloadResponse(text = '') {
+  if (!hasWorkoutCoach()) return `${COACH_NAME}: Workout tracker is not loaded yet.`;
+  const status = getTodayWorkoutStatus();
+  const workout = status.workout;
+  if (workout.rest) return `${COACH_NAME}: Rest day. No overload chase today. Recover so the next session moves.`;
+  const query = String(text || '').toLowerCase();
+  const exercise = workout.exercises.find(ex => query.includes(ex.name.toLowerCase())) || status.priorityLift || workout.exercises[0];
+  const last = getLastExercisePerformance(exercise.id);
+  const suggestion = getProgressiveOverloadSuggestion(exercise, getExerciseHistory(exercise.id));
+  return `${COACH_NAME}: Start with ${exercise.name}. ${last ? `Last time: ${formatWorkoutPerformance(last)}. ` : ''}${suggestion}`;
+}
+
+function getDidIGetStrongerResponse() {
+  if (!hasWorkoutCoach()) return `${COACH_NAME}: Workout tracker is not loaded yet.`;
+  const status = getTodayWorkoutStatus();
+  if (status.workout.rest) return `${COACH_NAME}: Rest day. Getting stronger today means recovering properly.`;
+  if (!status.currentVolume) return `${COACH_NAME}: Not judged yet. Log weights and reps first, then I can compare volume, reps, and load.`;
+  if (status.volumeDelta > 0) return `${COACH_NAME}: Yes. Volume is up by ${Math.round(status.volumeDelta)}. That is progressive overload. Now recover and hit protein.`;
+  return `${COACH_NAME}: Not yet. Match last session first, then add one rep or cleaner reps before adding weight.`;
+}
+
+function getWorkoutMissedResponse() {
+  return `${COACH_NAME}: Don't double-volume tomorrow. Move the missed session to the next available day or continue the split. Consistency beats punishment.`;
+}
+
+function getDietWorkoutConnectionResponse() {
+  const diet = getCoachContext();
+  if (!hasWorkoutCoach()) return `${COACH_NAME}: Diet is loaded, workout tracker is not. Hit calories, protein, and water.`;
+  const status = getTodayWorkoutStatus();
+  if (status.workout.rest) return `${COACH_NAME}: Rest day. Eat properly and recover. Recovery is part of overload.`;
+  if (!status.completedWorkout && (diet.remaining.kcal > 900 || diet.remaining.protein > 35)) {
+    return `${COACH_NAME}: You're underfed today and workout is pending. Eat carbs + protein before training. Don't chase PRs empty.`;
+  }
+  if (status.completedWorkout && diet.remaining.protein > 20) {
+    return `${COACH_NAME}: Workout logged, but post-workout protein is still pending. Finish the planned meal or log a protein extra.`;
+  }
+  if (diet.missedMeals.length) {
+    return `${COACH_NAME}: You missed meals and want overload. Don't expect PRs while underfed. Fix food, then train.`;
+  }
+  return `${COACH_NAME}: Diet and workout are aligned enough. Train hard, log every set, then recover with protein.`;
+}
+
 function getStartupCoachBrief() {
   const ctx = getCoachContext();
   const dayPhase = getDayPhase();
   const missedNames = ctx.missedMeals.map(m => cleanMealName(m.name));
   const next = getNextPendingMeal();
   if (dayPhase === 'before_first_meal') {
-    return `${COACH_NAME}: New day. No meals missed yet. ${getFirstMealLine()} Stay ready.`;
+    return `${COACH_NAME}: New day. No meals missed yet. ${getFirstMealLine()} Stay ready.${getWorkoutStartupLine() ? `\n${getWorkoutStartupLine()}` : ''}`;
   }
   if (dayPhase === 'late_day') {
     if (ctx.remaining.kcal > 500 || ctx.remaining.protein > 20 || missedNames.length) {
-      return `${COACH_NAME}: Day is almost over. ${missedNames.length ? `You missed ${missedNames.join(', ')}. ` : ''}You're ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein short.\n${getNightRescuePlan(false)}`;
+      return `${COACH_NAME}: Day is almost over. ${missedNames.length ? `You missed ${missedNames.join(', ')}. ` : ''}You're ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein short.\n${getNightRescuePlan(false)}${getWorkoutStartupLine() ? `\n${getWorkoutStartupLine()}` : ''}`;
     }
   }
   if (missedNames.length || ctx.remaining.kcal > 500 || ctx.remaining.protein > 20) {
-    return `${COACH_NAME}: ${missedNames.length ? `Missed so far: ${missedNames.join(', ')}. ` : ''}Progress: ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein remaining.${next ? ` Next meal: ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}. ${getMealPlanSuggestion(next)}` : ''}`;
+    return `${COACH_NAME}: ${missedNames.length ? `Missed so far: ${missedNames.join(', ')}. ` : ''}Progress: ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein remaining.${next ? ` Next meal: ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}. ${getMealPlanSuggestion(next)}` : ''}${getWorkoutStartupLine() ? `\n${getWorkoutStartupLine()}` : ''}`;
   }
   return next
-    ? `${COACH_NAME}: Good start. Stay on schedule - next meal is ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}.`
-    : `${COACH_NAME}: Good work. All meals are checked. Keep water on target.`;
+    ? `${COACH_NAME}: Good start. Stay on schedule - next meal is ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}.${getWorkoutStartupLine() ? `\n${getWorkoutStartupLine()}` : ''}`
+    : `${COACH_NAME}: Good work. All meals are checked. Keep water on target.${getWorkoutStartupLine() ? `\n${getWorkoutStartupLine()}` : ''}`;
 }
 
 function showStartupCoachBrief() {
@@ -596,6 +664,8 @@ function getLocalCoachResponse(text) {
       ? `${COACH_NAME}: I'm here. Progress: ${ctx.consumed.kcal}/${ctx.totals.kcal} kcal, ${ctx.consumed.protein}/${ctx.totals.protein}g protein. Next meal: ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}.`
       : `${COACH_NAME}: I'm here. No upcoming planned meals left today. Keep water on target.`;
   }
+  const workoutAction = getLocalWorkoutCoachResponse(text);
+  if (workoutAction) return workoutAction;
   const localActions = [
     { match: t.includes('what should i eat now'), reason: 'eat_now', response: () => getNextMealSuggestion() },
     { match: t.includes('judge my day'), reason: 'judge_day', response: () => getEndOfDayReport() },
@@ -616,6 +686,26 @@ function getLocalCoachResponse(text) {
     return action.response();
   }
   return null;
+}
+
+function getLocalWorkoutCoachResponse(text) {
+  const t = String(text || '').toLowerCase();
+  const actions = [
+    { match: t.includes('what workout today') || t.includes('what should i train today') || t.includes('workout today') || t.includes('should i train today'), reason: 'workout_today', response: () => getWorkoutTodayResponse() },
+    { match: t.includes('progressive overload') || t.includes('next weight'), reason: 'progressive_overload', response: () => getWorkoutProgressiveOverloadResponse(text) },
+    { match: t.includes('did i get stronger'), reason: 'did_i_get_stronger', response: () => getDidIGetStrongerResponse() },
+    { match: t.includes('workout review'), reason: 'workout_review', response: () => {
+      if (!hasWorkoutCoach()) return `${COACH_NAME}: Workout tracker is not loaded yet.`;
+      const review = getWorkoutWeeklyReview();
+      return `${COACH_NAME}: ${review.summary} Strongest improvement: ${review.strongestLiftImprovement}. Fix: ${review.fixForNextWeek}`;
+    } },
+    { match: t.includes('i missed workout'), reason: 'missed_workout', response: () => getWorkoutMissedResponse() },
+    { match: t.includes('connect diet and workout'), reason: 'diet_workout_connection', response: () => getDietWorkoutConnectionResponse() }
+  ];
+  const action = actions.find(item => item.match);
+  if (!action) return null;
+  console.log('X local response used:', action.reason);
+  return action.response();
 }
 
 function getMealPlanFoodNames() {
@@ -657,6 +747,7 @@ function getDeterministicCoachFallback(reason = 'ai_safety_filter') {
 
 function getAppContext() {
   const ctx = getCoachContext();
+  const workoutCtx = hasWorkoutCoach() ? getWorkoutCoachContext() : null;
   return `You are X, a strict but helpful bulking coach inside a diet tracker.
 
 COACH MEMORY:
@@ -688,10 +779,21 @@ ${state.meals.map(m => `- ${m.name} (${m.timeLabel || fmt12(m.timeVal)}): ${m.kc
 EXTRA MEALS TODAY:
 ${ctx.extras.length ? ctx.extras.map(e=>`- ${e.name}: ${e.kcal} kcal, ${e.protein || 0}g protein`).join('\n') : 'None'}
 
+WORKOUT STATE:
+${workoutCtx ? `- Today's workout: ${workoutCtx.todayWorkout.name} (${workoutCtx.todayWorkout.day})
+- Focus: ${workoutCtx.focus || 'none'}
+- Exercises completed: ${workoutCtx.exercisesCompleted}
+- Pending exercises: ${workoutCtx.pendingExercises.join(', ') || 'none'}
+- Priority lift: ${workoutCtx.priorityLift}
+- Last priority performance: ${workoutCtx.lastPerformance ? formatWorkoutPerformance(workoutCtx.lastPerformance) : 'none'}
+- Progressive overload suggestions: ${workoutCtx.progressiveOverloadSuggestions.map(item => `${item.exercise}: ${item.suggestion}`).join(' | ')}
+- Weekly workout consistency: ${workoutCtx.weeklyWorkoutConsistency.summary}` : 'Workout tracker unavailable.'}
+
 STYLE:
 - Call yourself X only.
 - Strict, direct, useful.
 - Give exact next actions.
+- Connect diet and workout when useful: warn if workout is pending and calories/protein are low, or if workout is complete and protein is still pending.
 - Never use any previous coach name.
 - Never present alternative foods as the saved meal. Saved meal foods must come only from MEAL PLAN. Alternatives are allowed only when clearly labeled as Alternative recovery or Backup option.
 - Keep replies under 80 words unless asked for detail.`;

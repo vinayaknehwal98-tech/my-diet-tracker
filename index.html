@@ -14,7 +14,7 @@
 <meta name="apple-mobile-web-app-title" content="Diet Tracker">
 <link rel="manifest" href="manifest.json">
 <title>Diet Tracker</title>
-<link rel="stylesheet" href="css/style.css?v=x-coach-hunger-mode-1">
+<link rel="stylesheet" href="css/style.css?v=workout-pro-1">
 </head>
 <body>
 
@@ -60,6 +60,7 @@
 <div class="tabs" id="tabBar">
   <button class="tab active" onclick="switchTab('today', this)">Today</button>
   <button class="tab" onclick="switchTab('week', this)">Week</button>
+  <button class="tab" onclick="switchTab('workout', this)">🏋️ Workout</button>
   <button class="tab" onclick="switchTab('reminders', this)">🔔 Reminders</button>
   <button class="tab" onclick="switchTab('export', this)">📊 Export</button>
 </div>
@@ -288,6 +289,42 @@
   </div>
 </div>
 
+<!-- Import Workout Modal -->
+<div class="modal-bg" id="workoutImportModal">
+  <div class="modal">
+    <div class="modal-handle"></div>
+    <div class="modal-title">Import Workout</div>
+    <div class="modal-sub">Upload or paste a split. Local parsing works without AI.</div>
+
+    <div class="import-drop-zone" id="workoutImportDropZone"
+      onclick="document.getElementById('workoutImportFileInput').click()"
+      ondragover="event.preventDefault(); this.classList.add('drag-over')"
+      ondragleave="this.classList.remove('drag-over')"
+      ondrop="handleWorkoutImportDrop(event)">
+      <div class="drop-icon">Workout</div>
+      <div class="drop-title">Tap to upload workout</div>
+      <div class="drop-sub">JSON, TXT, CSV, or image<br>Paste text below for local parsing</div>
+    </div>
+    <input type="file" id="workoutImportFileInput" accept=".json,.txt,.csv,image/*" style="display:none" onchange="handleWorkoutImportFile(this)">
+
+    <div style="position:relative;margin-bottom:12px;">
+      <textarea id="workoutImportPasteArea"
+        placeholder="Monday - Push A&#10;Focus: Upper Chest + Triceps&#10;Incline DB Press - 4 x 8-10"
+        style="width:100%;min-height:110px;background:var(--card);border:1px solid var(--border);color:var(--text);padding:10px 12px;border-radius:10px;font-size:13px;font-family:var(--body);outline:none;resize:none;line-height:1.5;"
+        oninput="onWorkoutPasteInput(this)"></textarea>
+    </div>
+
+    <div class="import-status" id="workoutImportStatus"></div>
+    <div class="import-preview" id="workoutImportPreview"></div>
+
+    <div class="modal-actions">
+      <button class="btn-cancel" onclick="closeWorkoutImportModal()">Cancel</button>
+      <button class="btn-cancel" onclick="restoreDefaultWorkoutSplit()">Restore Default</button>
+      <button class="btn-save" id="workoutImportApplyBtn" onclick="applyWorkoutImport()" disabled style="opacity:0.4;cursor:not-allowed;">Apply Workout</button>
+    </div>
+  </div>
+</div>
+
 <!-- Import Diet Modal -->
 <div class="modal-bg" id="importModal">
   <div class="modal">
@@ -359,18 +396,19 @@
 
 <div class="toast" id="toast"></div>
 
-<script src="js/defaultMeals.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/state.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/utils.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/weight.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/meals.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/export.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/reminders.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/render.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/water.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/snapFoodScan.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/importDiet.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/aiAssistant.js?v=x-coach-hunger-mode-1"></script>
-<script src="js/main.js?v=x-coach-hunger-mode-1"></script>
+<script src="js/defaultMeals.js?v=workout-pro-1"></script>
+<script src="js/state.js?v=workout-pro-1"></script>
+<script src="js/utils.js?v=workout-pro-1"></script>
+<script src="js/weight.js?v=workout-pro-1"></script>
+<script src="js/meals.js?v=workout-pro-1"></script>
+<script src="js/export.js?v=workout-pro-1"></script>
+<script src="js/reminders.js?v=workout-pro-1"></script>
+<script src="js/render.js?v=workout-pro-1"></script>
+<script src="js/water.js?v=workout-pro-1"></script>
+<script src="js/snapFoodScan.js?v=workout-pro-1"></script>
+<script src="js/importDiet.js?v=workout-pro-1"></script>
+<script src="js/workout.js?v=workout-pro-1"></script>
+<script src="js/aiAssistant.js?v=workout-pro-1"></script>
+<script src="js/main.js?v=workout-pro-1"></script>
 </body>
 </html>

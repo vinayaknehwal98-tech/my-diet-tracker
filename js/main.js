@@ -114,6 +114,7 @@ function exposeGlobals() {
     renderAll,
     renderToday,
     renderWeek,
+    renderWorkout,
     renderReminders,
     renderExport,
     updateMacros,
@@ -195,11 +196,42 @@ function exposeGlobals() {
     quitAnyway,
     lockContract
   });
+
+  if (typeof renderWorkout === 'function') {
+    Object.assign(window, {
+      renderWorkout,
+      getWorkoutState,
+      saveWorkoutState,
+      getTodayWorkout,
+      saveWorkoutLog,
+      resetTodayWorkout,
+      openWorkoutImportModal,
+      closeWorkoutImportModal,
+      handleWorkoutImportFile,
+      handleWorkoutImportDrop,
+      onWorkoutPasteInput,
+      applyWorkoutImport,
+      restoreDefaultWorkoutSplit,
+      getWorkoutCoachContext,
+      getWorkoutWeeklyReview,
+      getTodayWorkoutStatus,
+      getProgressiveOverloadSuggestion,
+      parseSetRepTarget,
+      parseRepsInput,
+      getExerciseHistory,
+      getLastExercisePerformance,
+      calculateVolume,
+      isCompoundExercise,
+      detectPersonalRecord,
+      estimateWorkoutImportWithAI,
+      parseWorkoutTextLocally
+    });
+  }
 }
 
 
 // --- INIT ---
-console.log('Diet Tracker version: x-coach-hunger-mode-1');
+console.log('Diet Tracker version: workout-pro-1');
 exposeGlobals();
 renderAll();
 setTimeout(() => {
