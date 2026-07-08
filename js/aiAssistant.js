@@ -523,15 +523,17 @@ function getWorkoutProgressiveOverloadResponse(text = '') {
   const exercise = workout.exercises.find(ex => query.includes(ex.name.toLowerCase())) || status.priorityLift || workout.exercises[0];
   const last = getLastExercisePerformance(exercise.id);
   const suggestion = getProgressiveOverloadSuggestion(exercise, getExerciseHistory(exercise.id));
-  return `${COACH_NAME}: Start with ${exercise.name}. ${last ? `Last time: ${formatWorkoutPerformance(last)}. ` : ''}${suggestion}`;
+  return `${COACH_NAME}: Start with ${exercise.name}. ${last ? `Last time: ${formatWorkoutPerformance(last)}. ` : ''}${suggestion.status}: ${suggestion.reason} Target: ${suggestion.nextTarget}${suggestion.warning ? ` Warning: ${suggestion.warning}` : ''}`;
 }
 
 function getDidIGetStrongerResponse() {
   if (!hasWorkoutCoach()) return `${COACH_NAME}: Workout tracker is not loaded yet.`;
+  const memory = typeof inferUserPatterns === 'function' ? inferUserPatterns() : null;
   const status = getTodayWorkoutStatus();
   if (status.workout.rest) return `${COACH_NAME}: Rest day. Getting stronger today means recovering properly.`;
   if (!status.currentVolume) return `${COACH_NAME}: Not judged yet. Log weights and reps first, then I can compare volume, reps, and load.`;
-  if (status.volumeDelta > 0) return `${COACH_NAME}: Yes. Volume is up by ${Math.round(status.volumeDelta)}. That is progressive overload. Now recover and hit protein.`;
+  if (status.volumeDelta > 0) return `${COACH_NAME}: Yes. Volume is up by ${Math.round(status.volumeDelta)}. Strong trend: ${memory?.strongestExercises?.[0]?.name || "today's logged work"}. Now recover and hit protein.`;
+  if (memory?.plateauExercises?.[0]?.count >= 3) return `${COACH_NAME}: Strength trend is mixed. ${memory.plateauExercises[0].name} is plateaued. Fix recovery/form before chasing load.`;
   return `${COACH_NAME}: Not yet. Match last session first, then add one rep or cleaner reps before adding weight.`;
 }
 
@@ -701,11 +703,46 @@ function getLocalWorkoutCoachResponse(text) {
     } },
     { match: t.includes('i missed workout'), reason: 'missed_workout', response: () => getWorkoutMissedResponse() },
     { match: t.includes('connect diet and workout'), reason: 'diet_workout_connection', response: () => getDietWorkoutConnectionResponse() }
+    ,
+    { match: t.includes('what have you learned about me'), reason: 'memory_summary', response: () => `${COACH_NAME}: ${typeof getUserLearningSummary === 'function' ? getUserLearningSummary() : 'I need 2-3 logged sessions before I can judge this properly.'}` },
+    { match: t.includes('what are my weak points'), reason: 'weak_points', response: () => getWeakPointsResponse() },
+    { match: t.includes('what should i focus on this week'), reason: 'weekly_focus', response: () => getWeeklyFocusResponse() },
+    { match: t.includes('am i getting stronger'), reason: 'strength_trend', response: () => getDidIGetStrongerResponse() },
+    { match: t.includes('why am i not progressing'), reason: 'not_progressing', response: () => getNotProgressingResponse() },
+    { match: t.includes('clear your memory'), reason: 'clear_memory', response: () => { if (typeof clearXCoachMemory === 'function') clearXCoachMemory(); return `${COACH_NAME}: Memory cleared. I will rebuild only from new logs.`; } },
+    { match: t.includes('update my memory'), reason: 'update_memory', response: () => { if (typeof refreshXCoachMemory === 'function') refreshXCoachMemory(); return `${COACH_NAME}: Memory updated from current diet and workout logs.`; } }
   ];
   const action = actions.find(item => item.match);
   if (!action) return null;
   console.log('X local response used:', action.reason);
   return action.response();
+}
+
+function getWeakPointsResponse() {
+  if (typeof inferUserPatterns !== 'function') return `${COACH_NAME}: I need 2-3 logged sessions before I can judge this properly.`;
+  const patterns = inferUserPatterns();
+  const weak = [];
+  if (patterns.missedMeals[0]?.count >= 2) weak.push(`${patterns.missedMeals[0].name} consistency`);
+  if (patterns.missedWorkouts[0]?.count >= 2) weak.push(`${patterns.missedWorkouts[0].name} training consistency`);
+  if (patterns.plateauExercises[0]?.count >= 2) weak.push(`${patterns.plateauExercises[0].name} plateau`);
+  if (!weak.length) return `${COACH_NAME}: I need 2-3 logged sessions before I can judge this properly.`;
+  return `${COACH_NAME}: Weak points: ${weak.join(', ')}. Fix one bottleneck first, not everything at once.`;
+}
+
+function getWeeklyFocusResponse() {
+  if (!hasWorkoutCoach()) return `${COACH_NAME}: I need workout logs before setting a weekly focus.`;
+  const review = getWorkoutWeeklyReview();
+  return `${COACH_NAME}: This week focus: ${review.nextWeekFocus}. Bottleneck: ${review.mainBottleneck}. Rule: ${review.oneRule}`;
+}
+
+function getNotProgressingResponse() {
+  const diet = getCoachContext();
+  const review = hasWorkoutCoach() ? getWorkoutWeeklyReview() : null;
+  const memory = typeof inferUserPatterns === 'function' ? inferUserPatterns() : null;
+  if (!hasWorkoutCoach()) return `${COACH_NAME}: I need 2-3 logged sessions before I can judge this properly.`;
+  if (diet.remaining.protein > 25 || diet.remaining.kcal > 900) return `${COACH_NAME}: Your lifts are not the only issue. Food is behind. Fix: eat before gym, keep same weight, add clean reps only after matching last session.`;
+  if (memory?.plateauExercises?.[0]?.count >= 3) return `${COACH_NAME}: ${memory.plateauExercises[0].name} is stuck. ${review.nextWeekFocus}. Do not just add reps.`;
+  return `${COACH_NAME}: I need 2-3 logged sessions before I can judge this properly. Log full sets, RIR, notes, and post-workout protein.`;
 }
 
 function getMealPlanFoodNames() {
@@ -786,8 +823,11 @@ ${workoutCtx ? `- Today's workout: ${workoutCtx.todayWorkout.name} (${workoutCtx
 - Pending exercises: ${workoutCtx.pendingExercises.join(', ') || 'none'}
 - Priority lift: ${workoutCtx.priorityLift}
 - Last priority performance: ${workoutCtx.lastPerformance ? formatWorkoutPerformance(workoutCtx.lastPerformance) : 'none'}
-- Progressive overload suggestions: ${workoutCtx.progressiveOverloadSuggestions.map(item => `${item.exercise}: ${item.suggestion}`).join(' | ')}
+- Progressive overload suggestions: ${workoutCtx.progressiveOverloadSuggestions.map(item => `${item.exercise}: ${item.suggestion.status} - ${item.suggestion.nextTarget}${item.suggestion.warning ? ' / ' + item.suggestion.warning : ''}`).join(' | ')}
 - Weekly workout consistency: ${workoutCtx.weeklyWorkoutConsistency.summary}` : 'Workout tracker unavailable.'}
+
+X MEMORY:
+${typeof getUserLearningSummary === 'function' ? getUserLearningSummary() : 'I need 2-3 logged sessions before I can judge this properly.'}
 
 STYLE:
 - Call yourself X only.

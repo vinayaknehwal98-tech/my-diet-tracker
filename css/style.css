@@ -1221,6 +1221,67 @@
   font-weight: 700;
   margin-bottom: 8px;
 }
+.x-memory-panel {
+  background: linear-gradient(180deg, rgba(17,18,21,0.98), rgba(10,10,11,0.98));
+  border: 1px solid rgba(139,148,158,0.22);
+  border-radius: 16px;
+  padding: 14px;
+  margin-bottom: 12px;
+}
+.x-memory-head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+  margin-bottom: 12px;
+}
+.x-memory-head span,
+.x-memory-grid span {
+  display: block;
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-family: var(--font);
+}
+.x-memory-head strong {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font);
+}
+.x-memory-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+.x-memory-actions button {
+  background: rgba(139,148,158,0.10);
+  border: 1px solid var(--border);
+  color: var(--text);
+  border-radius: 999px;
+  padding: 7px 9px;
+  font-size: 11px;
+  font-family: var(--font);
+  cursor: pointer;
+}
+.x-memory-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+.x-memory-grid > div {
+  background: rgba(255,255,255,0.035);
+  border: 1px solid rgba(255,255,255,0.055);
+  border-radius: 12px;
+  padding: 10px;
+}
+.x-memory-grid strong {
+  display: block;
+  margin-top: 5px;
+  font-size: 12px;
+  line-height: 1.35;
+}
 
 @media (max-width: 560px) {
   .tabs { grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 5px; padding-left: 10px; padding-right: 10px; }
@@ -1229,4 +1290,7 @@
   .workout-hero-actions { justify-content: flex-start; }
   .workout-insights { grid-template-columns: 1fr; }
   .workout-input-grid { grid-template-columns: 1fr; }
+  .x-memory-head { flex-direction: column; }
+  .x-memory-actions { justify-content: flex-start; }
+  .x-memory-grid { grid-template-columns: 1fr; }
 }

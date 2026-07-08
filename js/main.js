@@ -224,14 +224,25 @@ function exposeGlobals() {
       isCompoundExercise,
       detectPersonalRecord,
       estimateWorkoutImportWithAI,
-      parseWorkoutTextLocally
+      parseWorkoutTextLocally,
+      getXCoachMemory,
+      saveXCoachMemory,
+      updateXCoachMemoryFromDiet,
+      updateXCoachMemoryFromWorkoutLog,
+      updateExerciseMemory,
+      getUserLearningSummary,
+      clearXCoachMemory,
+      addCoachMemoryNote,
+      inferUserPatterns,
+      getPatternConfidence,
+      refreshXCoachMemory
     });
   }
 }
 
 
 // --- INIT ---
-console.log('Diet Tracker version: workout-pro-1');
+console.log('Diet Tracker version: workout-brain-1');
 exposeGlobals();
 renderAll();
 setTimeout(() => {
