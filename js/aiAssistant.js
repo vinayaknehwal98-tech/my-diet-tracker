@@ -307,6 +307,81 @@ function getFirstMealIsLine() {
   return `First meal is ${cleanMealName(firstMeal.name)} at ${fmt12(firstMeal.timeVal)}.`;
 }
 
+function parseTimeTextToMinutes(value) {
+  const text = String(value || '').trim();
+  const match = text.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!match) return null;
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = String(match[3] || '').toUpperCase();
+  if (meridiem === 'PM' && hour < 12) hour += 12;
+  if (meridiem === 'AM' && hour === 12) hour = 0;
+  return (hour * 60) + minute;
+}
+
+function getGymMinutes() {
+  return parseTimeTextToMinutes(coachProfile.gymTime);
+}
+
+function isHungerModeText(text) {
+  const t = String(text || '').toLowerCase().trim();
+  const hasHungerWord = /\b(hungry|bhook|bhukh)\b|bhook lagi hai|bhukh lagi hai/.test(t);
+  const wantsExtraFood = /\b(i am hungry|im hungry|i'm hungry|i want to eat|i want to eat now|can i eat|can i eat now|kuch khana hai)\b/.test(t);
+  return hasHungerWord || wantsExtraFood;
+}
+
+function isGymAfterText(text) {
+  return /\b(after gym|post workout|post-workout|gym done|workout done)\b/i.test(text);
+}
+
+function getBridgeSnack(ctx) {
+  if (ctx.remaining.kcal > 700) return 'banana + peanut butter';
+  if (ctx.remaining.protein > 25) return '2 eggs or curd';
+  return 'banana, curd, 1 roti, or 2 eggs';
+}
+
+function getExtraMealByMacros(ctx) {
+  const proteinLow = ctx.remaining.protein > 25;
+  const caloriesLow = ctx.remaining.kcal > 700;
+  if (proteinLow && caloriesLow) return '2 eggs + 2 roti + banana';
+  if (proteinLow) return '2 eggs, dal, curd, or whey if unused';
+  if (caloriesLow) return 'banana + peanut butter, roti, or rice';
+  return 'banana + curd, 2 eggs, or 1 roti';
+}
+
+function getHungerSuggestion(text = '') {
+  const ctx = getCoachContext();
+  const currentMinutes = getCurrentMinutes();
+  const gymMinutes = getGymMinutes();
+  const nextMealMinutes = mealTimeToMinutes(ctx.nextMeal);
+  const minutesUntilNext = nextMealMinutes === null ? null : nextMealMinutes - currentMinutes;
+  const badlyBehind = ctx.remaining.kcal > 900 || ctx.remaining.protein > 35 || ctx.missedMeals.length >= 2;
+
+  if (isGymAfterText(text) || (gymMinutes !== null && currentMinutes >= gymMinutes && currentMinutes <= gymMinutes + 120)) {
+    return `${COACH_NAME}: Post-workout meal: whey if unused, eggs/roti, dal/rice, or curd/milk. Protein first, calories second. Log it as Extra unless it is already your planned meal.`;
+  }
+
+  if (gymMinutes !== null && currentMinutes < gymMinutes && gymMinutes - currentMinutes <= 90) {
+    return `${COACH_NAME}: Pre-workout snack: banana + peanut butter, oats, or roti + light protein. Log it as Extra unless it is your planned Pre-Workout meal.`;
+  }
+
+  if (ctx.dayPhase === 'before_first_meal') {
+    const label = currentMinutes < (5 * 60) ? 'Optional late-night mini meal' : 'Optional pre-breakfast mini meal';
+    return `${COACH_NAME}: You can eat, but don't mark ${cleanMealName(getFirstMeal()?.name) || 'Breakfast'} done. ${label}: 1 banana + peanut butter, or 2 eggs, or 2 eggs + 1 roti if very hungry. Log it as Extra. ${cleanMealName(getFirstMeal()?.name) || 'Breakfast'} still stays at ${fmt12(getFirstMeal()?.timeVal) || 'the scheduled time'}.`;
+  }
+
+  if (ctx.dayPhase === 'late_day') {
+    if (badlyBehind) return getNightRescuePlan(true);
+    return `${COACH_NAME}: Optional late-night mini meal: banana + curd or 2 eggs. Log it as Extra. This does not replace any planned meal.`;
+  }
+
+  if (ctx.dayPhase === 'active_day' && minutesUntilNext !== null && minutesUntilNext >= 0 && minutesUntilNext <= 60) {
+    return `${COACH_NAME}: Your planned meal is close. Eat that soon. If you can't wait, take a small bridge snack and log it as Extra. Bridge snack: ${getBridgeSnack(ctx)}.`;
+  }
+
+  return `${COACH_NAME}: Take an optional extra meal. This does not replace your planned meal. Log it as Extra. Option: ${getExtraMealByMacros(ctx)}.`;
+}
+
 function getFoodCombo(remaining, mode = '') {
   const parts = [];
   if (remaining.protein > 35) parts.push('1 scoop whey', '2 eggs', 'dal');
@@ -503,6 +578,10 @@ function handleCoachQuickAction(action, detail = '') {
 
 function getLocalCoachResponse(text) {
   const t = text.toLowerCase();
+  if (isHungerModeText(text)) {
+    console.log('X local response used:', 'hunger_mode');
+    return getHungerSuggestion(text);
+  }
   if (/^(hi|hii|hello|hey|yo|good morning|good evening)[!.\s]*$/i.test(text.trim())) {
     console.log('X local response used:', 'greeting');
     const ctx = getCoachContext();
