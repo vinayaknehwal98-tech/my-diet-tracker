@@ -198,7 +198,12 @@ function exposeGlobals() {
 
 
 // --- INIT ---
+console.log('Diet Tracker version: x-coach-2');
 exposeGlobals();
 renderAll();
-showStartupCoachBrief();
+setTimeout(() => {
+  if (typeof showStartupCoachBrief === "function") {
+    showStartupCoachBrief();
+  }
+}, 600);
 initReminders();

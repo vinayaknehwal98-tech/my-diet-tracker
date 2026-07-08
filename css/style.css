@@ -862,29 +862,38 @@
   font-style: italic;
 }
 .ai-quick-actions {
-  display: flex;
+  display: flex !important;
   gap: 8px;
   overflow-x: auto;
+  overflow-y: hidden;
   padding: 10px 16px;
   border-top: 1px solid var(--border);
   flex-shrink: 0;
   scrollbar-width: none;
+  background: var(--surface);
+  -webkit-overflow-scrolling: touch;
 }
 .ai-quick-actions::-webkit-scrollbar { display: none; }
 .ai-quick-actions button {
+  appearance: none;
+  -webkit-appearance: none;
   white-space: nowrap;
-  background: rgba(139,148,158,0.08);
-  border: 1px solid var(--border);
-  color: var(--text);
-  border-radius: 999px;
-  padding: 8px 11px;
-  font-size: 12px;
-  font-family: var(--font);
+  background: rgba(139,148,158,0.10) !important;
+  border: 1px solid var(--border) !important;
+  color: var(--text) !important;
+  border-radius: 999px !important;
+  padding: 8px 11px !important;
+  font-size: 12px !important;
+  font-family: var(--font) !important;
+  line-height: 1.2 !important;
   cursor: pointer;
+  box-shadow: none !important;
+  flex: 0 0 auto;
 }
 .ai-quick-actions button:hover {
-  border-color: #6366f1;
-  color: #a5b4fc;
+  background: rgba(99,102,241,0.16) !important;
+  border-color: #6366f1 !important;
+  color: #c7d2fe !important;
 }
 .ai-input-row {
   display: flex;
