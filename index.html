@@ -3489,34 +3489,44 @@ function showToast(msg) {
 // --- INIT ---
 renderAll();
 
-// --- SNAP / LOG MEAL ---
-let snapContext = { mealId: null, mealName: null }; // which meal triggered snap
-let snapIdentified = null; // { name, emoji, kcal, protein, carbs, fat, desc }
+// --- AI FOOD SCAN V2 / SNAP MEAL LOGGING ---
+// All AI estimates are normalized, shown as an editable preview, and only saved after explicit confirmation.
+const AI_FOOD_SCAN_WORKER_URL = 'https://blue-poetry-b2ac.vinayaknehwal98.workers.dev';
+let snapContext = { mealId: null, mealName: null };
+let snapIdentified = null;
 let snapDescDebounce = null;
+let snapImageData = null;
 
 function triggerSnapInput(type) {
   const id = type === 'camera' ? 'snapFileInputCamera' : 'snapFileInputGallery';
-  document.getElementById(id).click();
+  const input = document.getElementById(id);
+  if (input) input.click();
 }
 
 function openSnapModal(mealId, mealName) {
-  snapContext = { mealId, mealName };
+  snapContext = { mealId: mealId || null, mealName: mealName || null };
   snapIdentified = null;
+  snapImageData = null;
+  clearTimeout(snapDescDebounce);
+
   document.getElementById('snapFileInputCamera').value = '';
   document.getElementById('snapFileInputGallery').value = '';
   document.getElementById('snapDescArea').value = '';
+  document.getElementById('snapDescArea').placeholder = 'Or describe what you ate...';
+  document.getElementById('snapPreviewImg').removeAttribute('src');
   document.getElementById('snapPreviewImg').style.display = 'none';
+  document.getElementById('snapDropZone').style.display = 'block';
   document.getElementById('snapResult').style.display = 'none';
   document.getElementById('snapActions').style.display = 'none';
-  document.getElementById('snapDropIcon').textContent = '📷';
-  document.getElementById('snapDropTitle').textContent = 'Tap to take / upload photo';
+  document.getElementById('snapDropIcon').textContent = '\uD83D\uDCF7';
+  document.getElementById('snapDropTitle').textContent = 'How do you want to add the photo?';
+  document.getElementById('snapActionButtons').innerHTML = '';
   setSnapStatus('', '');
-  const title = mealId
-    ? 'Swapped: ' + (mealName || mealId)
-    : '📸 Log Extra Meal';
+
+  const title = mealId ? 'Swapped: ' + (mealName || mealId) : '\uD83D\uDCF8 I Ate This';
   const sub = mealId
-    ? 'Photo or describe what you actually ate instead.'
-    : 'Photo or describe an extra meal you had today.';
+    ? 'Scan or describe what you ate instead. Review the estimate before saving.'
+    : 'Scan or describe an extra meal. Review the estimate before saving.';
   document.getElementById('snapModalTitle').textContent = title;
   document.getElementById('snapModalSub').textContent = sub;
   document.getElementById('snapModal').classList.add('open');
@@ -3525,42 +3535,46 @@ function openSnapModal(mealId, mealName) {
 function closeSnapModal() {
   document.getElementById('snapModal').classList.remove('open');
   snapIdentified = null;
+  snapImageData = null;
+  clearTimeout(snapDescDebounce);
 }
+
 document.getElementById('snapModal').addEventListener('click', function(e) {
   if (e.target === this) closeSnapModal();
 });
 
 function handleSnapFile(input) {
-  const file = input.files[0];
+  const file = input.files && input.files[0];
   if (!file) return;
-  const url = URL.createObjectURL(file);
+
   const img = document.getElementById('snapPreviewImg');
-  img.src = url;
+  img.src = URL.createObjectURL(file);
   img.style.display = 'block';
   document.getElementById('snapDropZone').style.display = 'none';
-  document.getElementById('snapDropIcon').textContent = '📸';
   document.getElementById('snapDescArea').placeholder = 'Add any extra details (optional)...';
-  setSnapStatus('loading', '🤖 Identifying food...');
   document.getElementById('snapResult').style.display = 'none';
   document.getElementById('snapActions').style.display = 'none';
+  setSnapStatus('loading', 'Analyzing food...');
 
   const reader = new FileReader();
   reader.onload = async (e) => {
-    const b64 = e.target.result.split(',')[1];
-    const mime = file.type || 'image/jpeg';
-    await identifyFoodFromImage(b64, mime, document.getElementById('snapDescArea').value.trim());
+    snapImageData = {
+      b64: String(e.target.result || '').split(',')[1] || '',
+      mime: file.type || 'image/jpeg'
+    };
+    await estimateSnapMeal();
   };
+  reader.onerror = () => setSnapStatus('error', 'Could not read this image. Try another photo or describe the meal.');
   reader.readAsDataURL(file);
 }
 
 function onSnapDescInput(el) {
   clearTimeout(snapDescDebounce);
   const val = el.value.trim();
-  if (!val) return;
-  // Only auto-identify from text if no image shown
-  if (document.getElementById('snapPreviewImg').style.display === 'none') {
-    snapDescDebounce = setTimeout(() => identifyFoodFromText(val), 900);
-  }
+  if (!val && !snapImageData) return;
+  document.getElementById('snapResult').style.display = 'none';
+  document.getElementById('snapActions').style.display = 'none';
+  snapDescDebounce = setTimeout(() => estimateSnapMeal(), snapImageData ? 1100 : 750);
 }
 
 function setSnapStatus(type, msg) {
@@ -3569,158 +3583,344 @@ function setSnapStatus(type, msg) {
   el.textContent = msg;
 }
 
-async function identifyFoodFromImage(b64, mime, extraDesc) {
-  setSnapStatus('loading', '🤖 Identifying food...');
-  const prompt = `Look at this food photo${extraDesc ? ' (extra context: ' + extraDesc + ')' : ''}.
-
-Identify what food/meal is in the image and estimate its nutritional content.
-Return ONLY a JSON object with no extra text:
-{
-  "name": "Food name",
-  "emoji": "single emoji",
-  "description": "brief description e.g. '2 rotis + dal'",
-  "kcal": 450,
-  "protein": 18,
-  "carbs": 60,
-  "fat": 12
-}`;
-
-  try {
-    const res = await fetch('https://blue-poetry-b2ac.vinayaknehwal98.workers.dev', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'meta-llama/llama-4-scout-17b-16e-instruct',
-        max_tokens: 500,
-        messages: [{
-          role: 'user',
-          content: [
-            { type: 'image', source: { type: 'base64', media_type: mime, data: b64 } },
-            { type: 'text', text: prompt }
-          ]
-        }]
-      })
-    });
-    if (!res.ok) throw new Error('API ' + res.status);
-    const data = await res.json();
-    const raw = data.content.find(b => b.type === 'text')?.text || '';
-    const cleaned = raw.replace(/```json/gi, '').replace(/```/g, '').trim();
-    const match = cleaned.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('No JSON');
-    const food = JSON.parse(match[0]);
-    showSnapResult(food);
-  } catch(err) {
-    setSnapStatus('error', 'Could not identify: ' + err.message + '. Try describing it below.');
+async function estimateSnapMeal() {
+  const desc = document.getElementById('snapDescArea').value.trim();
+  if (!desc && !snapImageData) {
+    setSnapStatus('error', 'Add a photo or type what you ate first.');
+    return null;
   }
-}
-async function identifyFoodFromText(desc) {
-  setSnapStatus('loading', '🤖 Looking up macros...');
-  const prompt = `The user ate: "${desc}"
-Estimate nutritional content. Return ONLY JSON with no extra text:
-{
-  "name": "Food name",
-  "emoji": "single emoji",
-  "description": "brief e.g. '2 rotis + sabzi'",
-  "kcal": 450,
-  "protein": 18,
-  "carbs": 60,
-  "fat": 12
-}`;
+
+  setSnapStatus('loading', snapImageData ? 'Analyzing food photo...' : 'Estimating macros...');
+
   try {
-    const res = await fetch('https://blue-poetry-b2ac.vinayaknehwal98.workers.dev', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        model: 'llama-3.1-8b-instant',
-        max_tokens: 300,
-        messages: [{ role: 'user', content: prompt }]
-      })
-    });
-    if (!res.ok) throw new Error('API ' + res.status);
-    const data = await res.json();
-    const raw = data.content.find(b => b.type === 'text')?.text || '';
-    const match = raw.match(/\{[\s\S]*\}/);
-    if (!match) throw new Error('No JSON');
-    const food = JSON.parse(match[0]);
-    showSnapResult(food);
-  } catch(err) {
-    setSnapStatus('error', 'Could not look up: ' + err.message);
+    const result = await estimateSnapMealWithWorker(desc, snapImageData);
+    renderSnapResult(result);
+    setSnapStatus('success', 'Review the estimate before saving.');
+    return result;
+  } catch (err) {
+    const fallback = estimateSnapMealLocally(desc);
+    fallback.needsReview = true;
+    renderSnapResult(fallback);
+    setSnapStatus('error', 'AI scan used local fallback. Please review before saving.');
+    return fallback;
   }
 }
 
-function showSnapResult(food) {
-  snapIdentified = food;
-  setSnapStatus('success', 'Got it!');
-  setTimeout(() => setSnapStatus('', ''), 1500);
+async function estimateSnapMealWithWorker(desc, imageData) {
+  const prompt = `You are AI Food Scan v2 for a diet tracker.
+Estimate the meal from ${imageData ? 'the image' : 'the text'}${desc ? ` and this user note: "${desc}"` : ''}.
+Return ONLY valid JSON in this exact shape:
+{
+  "name": "Meal name",
+  "emoji": "single food emoji",
+  "kcal": 0,
+  "protein": 0,
+  "carbs": 0,
+  "fat": 0,
+  "items": [
+    { "name": "Food", "qty": "quantity", "cal": 0, "pro": 0 }
+  ],
+  "confidence": "low|medium|high",
+  "needsReview": true
+}
+Use realistic Indian household portions when exact quantity is unclear. Set needsReview true for uncertain estimates.`;
 
-  document.getElementById('snapFoodName').textContent = (food.emoji || '') + ' ' + food.name;
-  document.getElementById('snapFoodSub').textContent = food.description || '';
-  document.getElementById('snapFoodKcal').textContent = food.kcal + ' kcal';
-  document.getElementById('snapMacroP').textContent = food.protein + 'g protein';
-  document.getElementById('snapMacroC').textContent = (food.carbs || 0) + 'g carbs';
-  document.getElementById('snapMacroF').textContent = (food.fat || 0) + 'g fat';
-  document.getElementById('snapResult').style.display = 'block';
+  const content = imageData
+    ? [
+        { type: 'image', source: { type: 'base64', media_type: imageData.mime, data: imageData.b64 } },
+        { type: 'text', text: prompt }
+      ]
+    : prompt;
 
-  // Build action buttons
+  const res = await fetch(AI_FOOD_SCAN_WORKER_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model: imageData ? 'meta-llama/llama-4-scout-17b-16e-instruct' : 'llama-3.1-8b-instant',
+      max_tokens: imageData ? 700 : 450,
+      messages: [{ role: 'user', content }]
+    })
+  });
+
+  if (!res.ok) throw new Error('Worker ' + res.status);
+  const data = await res.json();
+  const raw = extractSnapWorkerText(data);
+  const parsed = parseSnapJson(raw);
+  return normalizeSnapMeal(parsed, desc);
+}
+
+function extractSnapWorkerText(data) {
+  if (typeof data === 'string') return data;
+  if (typeof data?.response === 'string') return data.response;
+  if (typeof data?.text === 'string') return data.text;
+  if (typeof data?.content === 'string') return data.content;
+  if (Array.isArray(data?.content)) {
+    return data.content.map(b => typeof b === 'string' ? b : (b.text || '')).join('\n');
+  }
+  if (Array.isArray(data?.choices)) {
+    return data.choices.map(c => c.message?.content || c.text || '').join('\n');
+  }
+  return JSON.stringify(data || {});
+}
+
+function parseSnapJson(raw) {
+  const cleaned = String(raw || '').replace(/```json/gi, '').replace(/```/g, '').trim();
+  const match = cleaned.match(/\{[\s\S]*\}/);
+  if (!match) throw new Error('No JSON estimate');
+  return JSON.parse(match[0]);
+}
+
+function normalizeSnapMeal(input, desc) {
+  const source = input && typeof input === 'object' ? input : {};
+  const itemSource = Array.isArray(source.items) ? source.items : [];
+  const items = itemSource.map(item => ({
+    name: String(item.name || item.food || 'Food').trim() || 'Food',
+    qty: String(item.qty || item.quantity || item.amount || '1 serving').trim() || '1 serving',
+    cal: snapNumber(item.cal ?? item.kcal ?? item.calories, 0),
+    pro: snapNumber(item.pro ?? item.protein, 0)
+  }));
+
+  if (!items.length && (source.description || desc)) {
+    items.push({
+      name: String(source.description || desc).slice(0, 80),
+      qty: 'estimated serving',
+      cal: snapNumber(source.kcal ?? source.calories, 0),
+      pro: snapNumber(source.protein ?? source.pro ?? source.proteins, 0)
+    });
+  }
+
+  const confidence = ['low', 'medium', 'high'].includes(String(source.confidence).toLowerCase())
+    ? String(source.confidence).toLowerCase()
+    : 'medium';
+
+  return {
+    name: String(source.name || source.title || 'Estimated meal').trim() || 'Estimated meal',
+    emoji: String(source.emoji || '\uD83C\uDF7D\uFE0F').trim() || '\uD83C\uDF7D\uFE0F',
+    kcal: snapNumber(source.kcal ?? source.calories, items.reduce((a, i) => a + i.cal, 0)),
+    protein: snapNumber(source.protein ?? source.pro ?? source.proteins, items.reduce((a, i) => a + i.pro, 0)),
+    carbs: snapNumber(source.carbs ?? source.carbohydrates, 0),
+    fat: snapNumber(source.fat ?? source.fats, 0),
+    items,
+    confidence,
+    needsReview: source.needsReview !== false
+  };
+}
+
+function snapNumber(value, fallback) {
+  const n = Number(String(value ?? '').replace(/[^\d.-]/g, ''));
+  return Number.isFinite(n) ? Math.max(0, Math.round(n)) : fallback;
+}
+
+function estimateSnapMealLocally(desc) {
+  const text = String(desc || '').toLowerCase();
+  const foods = [
+    { keys: ['banana'], name: 'Banana', emoji: '\uD83C\uDF4C', qty: '1 medium', cal: 105, pro: 1, carbs: 27, fat: 0 },
+    { keys: ['egg', 'anda'], name: 'Egg', emoji: '\uD83E\uDD5A', qty: '1 large', cal: 78, pro: 6, carbs: 1, fat: 5 },
+    { keys: ['roti', 'chapati', 'phulka'], name: 'Roti', emoji: '\uD83E\uDED3', qty: '1 medium', cal: 120, pro: 4, carbs: 22, fat: 3 },
+    { keys: ['rice', 'chawal'], name: 'Rice', emoji: '\uD83C\uDF5A', qty: '1 cup cooked', cal: 205, pro: 4, carbs: 45, fat: 0 },
+    { keys: ['dal', 'daal'], name: 'Dal', emoji: '\uD83E\uDD63', qty: '1 cup', cal: 180, pro: 12, carbs: 28, fat: 4 },
+    { keys: ['oats', 'oatmeal'], name: 'Oats', emoji: '\uD83E\uDD63', qty: '40 g', cal: 150, pro: 5, carbs: 27, fat: 3 },
+    { keys: ['peanut butter', 'pb'], name: 'Peanut butter', emoji: '\uD83E\uDD5C', qty: '1 tbsp', cal: 95, pro: 4, carbs: 3, fat: 8 },
+    { keys: ['whey', 'protein powder'], name: 'Whey protein', emoji: '\uD83E\uDD64', qty: '1 scoop', cal: 120, pro: 24, carbs: 3, fat: 2 },
+    { keys: ['milk', 'doodh'], name: 'Milk', emoji: '\uD83E\uDD5B', qty: '250 ml', cal: 150, pro: 8, carbs: 12, fat: 8 },
+    { keys: ['curd', 'yogurt', 'dahi'], name: 'Curd', emoji: '\uD83E\uDD63', qty: '1 cup', cal: 100, pro: 6, carbs: 8, fat: 5 },
+    { keys: ['almond', 'badam'], name: 'Almonds', emoji: '\uD83C\uDF30', qty: '10 pieces', cal: 70, pro: 3, carbs: 3, fat: 6 },
+    { keys: ['walnut', 'akhrot'], name: 'Walnuts', emoji: '\uD83C\uDF30', qty: '4 halves', cal: 90, pro: 2, carbs: 2, fat: 9 }
+  ];
+
+  const items = [];
+  foods.forEach(food => {
+    if (!food.keys.some(k => text.includes(k))) return;
+    const count = detectSnapFoodCount(text, food.keys) || 1;
+    items.push({
+      name: food.name,
+      qty: count > 1 ? `${count} x ${food.qty}` : food.qty,
+      cal: food.cal * count,
+      pro: food.pro * count,
+      carbs: food.carbs * count,
+      fat: food.fat * count,
+      emoji: food.emoji
+    });
+  });
+
+  if (!items.length) {
+    return normalizeSnapMeal({
+      name: desc || 'Food photo',
+      emoji: '\uD83C\uDF7D\uFE0F',
+      kcal: 0,
+      protein: 0,
+      carbs: 0,
+      fat: 0,
+      items: [{ name: desc || 'Food', qty: 'needs review', cal: 0, pro: 0 }],
+      confidence: 'low',
+      needsReview: true
+    }, desc);
+  }
+
+  return normalizeSnapMeal({
+    name: items.length === 1 ? items[0].name : 'Estimated meal',
+    emoji: items[0].emoji || '\uD83C\uDF7D\uFE0F',
+    kcal: items.reduce((a, i) => a + i.cal, 0),
+    protein: items.reduce((a, i) => a + i.pro, 0),
+    carbs: items.reduce((a, i) => a + i.carbs, 0),
+    fat: items.reduce((a, i) => a + i.fat, 0),
+    items,
+    confidence: 'low',
+    needsReview: true
+  }, desc);
+}
+
+function detectSnapFoodCount(text, keys) {
+  for (const key of keys) {
+    const re = new RegExp('(\\d+(?:\\.\\d+)?)\\s*(?:x\\s*)?(?:' + key.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + 's?)');
+    const match = text.match(re);
+    if (match) return Math.max(1, Math.round(Number(match[1])));
+  }
+  return null;
+}
+
+function renderSnapResult(result) {
+  snapIdentified = normalizeSnapMeal(result, document.getElementById('snapDescArea').value.trim());
+  const container = document.getElementById('snapResult');
+  container.innerHTML = `
+    <div style="display:grid;grid-template-columns:60px 1fr 82px;gap:8px;margin-bottom:10px;">
+      <input id="snapEditEmoji" value="${escapeSnapAttr(snapIdentified.emoji)}" aria-label="Emoji" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--font);font-size:18px;text-align:center;">
+      <input id="snapEditName" value="${escapeSnapAttr(snapIdentified.name)}" aria-label="Meal name" style="min-width:0;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--font);font-weight:700;">
+      <input id="snapEditKcal" type="number" min="0" value="${snapIdentified.kcal}" aria-label="Calories" style="width:100%;background:var(--bg);color:var(--accent);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--font);font-weight:800;text-align:right;">
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;margin-bottom:10px;">
+      <label style="font-size:11px;color:var(--muted);">Protein<input id="snapEditProtein" type="number" min="0" value="${snapIdentified.protein}" style="width:100%;margin-top:4px;background:var(--bg);color:var(--accent2);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--font);"></label>
+      <label style="font-size:11px;color:var(--muted);">Carbs<input id="snapEditCarbs" type="number" min="0" value="${snapIdentified.carbs}" style="width:100%;margin-top:4px;background:var(--bg);color:var(--yellow);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--font);"></label>
+      <label style="font-size:11px;color:var(--muted);">Fat<input id="snapEditFat" type="number" min="0" value="${snapIdentified.fat}" style="width:100%;margin-top:4px;background:var(--bg);color:var(--green);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--font);"></label>
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Confidence: ${snapIdentified.confidence} ${snapIdentified.needsReview ? '· review needed' : ''}</div>
+    <table class="food-table" style="margin-top:4px;">
+      <thead><tr><th>Food</th><th>Qty</th><th>Cal</th><th>Pro</th></tr></thead>
+      <tbody>
+        ${snapIdentified.items.map(item => `
+          <tr>
+            <td>${escapeSnapHtml(item.name)}</td>
+            <td>${escapeSnapHtml(item.qty)}</td>
+            <td>${item.cal}</td>
+            <td>${item.pro}g</td>
+          </tr>`).join('')}
+      </tbody>
+    </table>
+  `;
+  container.style.display = 'block';
+  renderSnapActionButtons();
+}
+
+function renderSnapActionButtons() {
   const btns = document.getElementById('snapActionButtons');
   btns.innerHTML = '';
 
-  // Swap options for each meal
   state.meals.forEach(m => {
-    const isCurrent = m.id === snapContext.mealId;
+    const mealLabel = m.name.replace(/^[^\w\s]*\s*/, '');
     const btn = document.createElement('button');
-    btn.className = 'snap-action-btn' + (isCurrent ? ' primary' : '');
-    btn.innerHTML = `${m.emoji} Swapped my <b>${m.name.replace(/^[^\w\s]*\s*/, '')}</b> with this`;
-    btn.onclick = () => logSnapEntry(food, m.id, m.name.replace(/^[^\w\s]*\s*/, ''));
+    btn.className = 'snap-action-btn' + (m.id === snapContext.mealId ? ' primary' : '');
+    btn.innerHTML = `${m.emoji} Swapped my <b>${escapeSnapHtml(mealLabel)}</b> with this`;
+    btn.onclick = () => logSnapAsSwap(m.id);
     btns.appendChild(btn);
   });
 
-  // Extra meal option
   const extraBtn = document.createElement('button');
-  extraBtn.className = 'snap-action-btn';
-  extraBtn.innerHTML = `<b>+ Add as extra meal</b> (outside my plan)`;
-  extraBtn.onclick = () => logSnapEntry(food, null, null);
+  extraBtn.className = 'snap-action-btn primary';
+  extraBtn.innerHTML = '<b>+ Add as extra meal</b> (outside my plan)';
+  extraBtn.onclick = () => logSnapAsExtra();
   btns.appendChild(extraBtn);
-
   document.getElementById('snapActions').style.display = 'block';
 }
 
-function logSnapEntry(food, swapMealId, swapMealName) {
+function readSnapPreviewEdits() {
+  if (!snapIdentified) return null;
+  return normalizeSnapMeal({
+    ...snapIdentified,
+    name: document.getElementById('snapEditName')?.value || snapIdentified.name,
+    emoji: document.getElementById('snapEditEmoji')?.value || snapIdentified.emoji,
+    kcal: document.getElementById('snapEditKcal')?.value ?? snapIdentified.kcal,
+    protein: document.getElementById('snapEditProtein')?.value ?? snapIdentified.protein,
+    carbs: document.getElementById('snapEditCarbs')?.value ?? snapIdentified.carbs,
+    fat: document.getElementById('snapEditFat')?.value ?? snapIdentified.fat
+  }, document.getElementById('snapDescArea').value.trim());
+}
+
+function logSnapAsExtra() {
+  logSnapEntryFromPreview(null);
+}
+
+function logSnapAsSwap(mealId) {
+  logSnapEntryFromPreview(mealId);
+}
+
+function logSnapEntryFromPreview(swapMealId) {
+  const food = readSnapPreviewEdits();
+  if (!food) {
+    setSnapStatus('error', 'Estimate the meal before saving.');
+    return;
+  }
+
+  const swapMeal = swapMealId ? state.meals.find(m => m.id === swapMealId) : null;
+  const swapMealName = swapMeal ? swapMeal.name.replace(/^[^\w\s]*\s*/, '') : null;
   if (!state.extraMeals) state.extraMeals = [];
 
   const now = new Date();
   const timeStr = now.toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' });
-
-  const entry = {
+  state.extraMeals.push({
     id: 'extra_' + Date.now(),
     date: todayKey(),
     name: food.name,
-    emoji: food.emoji || '📸',
+    emoji: food.emoji || '\uD83C\uDF7D\uFE0F',
     kcal: food.kcal,
     protein: food.protein,
     carbs: food.carbs || 0,
     fat: food.fat || 0,
+    items: food.items,
+    confidence: food.confidence,
+    needsReview: food.needsReview,
     time: timeStr,
-    swappedFor: swapMealName || null,
+    swappedFor: swapMealName,
     swapMealId: swapMealId || null
-  };
+  });
 
-  state.extraMeals.push(entry);
-
-  // If swapping, mark original meal as done too
   if (swapMealId) {
-    const k = todayKey() + '_' + swapMealId;
-    state.checked[k] = true;
+    state.checked[todayKey() + '_' + swapMealId] = true;
   }
 
   saveState();
   closeSnapModal();
   renderAll();
+  showToast(swapMealName ? `Logged swap for ${swapMealName} - ${food.kcal} kcal added` : `Extra meal logged - ${food.kcal} kcal added`);
+}
 
-  const msg = swapMealName
-    ? `Logged swap for ${swapMealName} — ${food.kcal} kcal added`
-    : `Extra meal logged — ${food.kcal} kcal added`;
-  showToast(msg);
+function escapeSnapHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, ch => ({
+    '&': '&amp;',
+    '<': '&lt;',
+    '>': '&gt;',
+    '"': '&quot;',
+    "'": '&#39;'
+  }[ch]));
+}
+
+function escapeSnapAttr(value) {
+  return escapeSnapHtml(value).replace(/`/g, '&#96;');
+}
+
+// Backward-compatible wrappers for any older inline calls/bookmarks.
+async function identifyFoodFromImage(b64, mime, extraDesc) {
+  snapImageData = { b64, mime: mime || 'image/jpeg' };
+  if (extraDesc) document.getElementById('snapDescArea').value = extraDesc;
+  return estimateSnapMeal();
+}
+
+async function identifyFoodFromText(desc) {
+  document.getElementById('snapDescArea').value = desc || '';
+  return estimateSnapMeal();
+}
+
+function showSnapResult(food) {
+  renderSnapResult(food);
 }
 
 function removeExtra(id) {
