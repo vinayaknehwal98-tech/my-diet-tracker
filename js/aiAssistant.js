@@ -153,15 +153,47 @@ function cleanMealName(name) {
   return String(name || '').replace(/^[^\w\s]*\s*/, '').trim();
 }
 
+function mealTimeToMinutes(meal) {
+  const val = String(meal?.timeVal || '').trim();
+  let match = val.match(/^(\d{1,2}):(\d{2})$/);
+  if (match) return (Number(match[1]) * 60) + Number(match[2]);
+
+  const label = String(meal?.timeLabel || '').trim();
+  match = label.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
+  if (!match) return 24 * 60;
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = String(match[3] || '').toUpperCase();
+  if (meridiem === 'PM' && hour < 12) hour += 12;
+  if (meridiem === 'AM' && hour === 12) hour = 0;
+  return (hour * 60) + minute;
+}
+
+function getCurrentMinutes() {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
 function getNextPendingMeal() {
   const pending = state.meals.filter(m => !isMealDone(m.id));
-  const now = new Date();
-  return pending.find(m => {
-    const [h, min] = m.timeVal.split(':').map(Number);
-    const t = new Date();
-    t.setHours(h, min, 0, 0);
-    return t >= now;
-  }) || pending[0] || null;
+  const currentMinutes = getCurrentMinutes();
+  const upcomingPendingMeals = pending
+    .filter(m => mealTimeToMinutes(m) >= currentMinutes)
+    .sort((a, b) => mealTimeToMinutes(a) - mealTimeToMinutes(b));
+  const nextMeal = upcomingPendingMeals[0] || null;
+  const lastMealMinutes = getLastMealMinutes();
+  const lateDay = currentMinutes > lastMealMinutes || currentMinutes >= (21 * 60 + 30);
+  console.log('X time context', { currentMinutes, nextMeal, lateDay });
+  return nextMeal;
+}
+
+function getLastMealMinutes() {
+  return Math.max(...state.meals.map(mealTimeToMinutes).filter(Number.isFinite), 0);
+}
+
+function isLateDay() {
+  const currentMinutes = getCurrentMinutes();
+  return currentMinutes > getLastMealMinutes() || currentMinutes >= (21 * 60 + 30);
 }
 
 function getFoodCombo(remaining, mode = '') {
@@ -184,7 +216,10 @@ function getNextMealSuggestion(includePrefix = true, mode = '') {
   const combo = getFoodCombo(ctx.remaining, mode);
   const nextMeal = getNextPendingMeal();
   const prefix = includePrefix ? `${COACH_NAME}: ` : '';
-  const mealLine = nextMeal ? ` Next scheduled meal: ${cleanMealName(nextMeal.name)} at ${fmt12(nextMeal.timeVal)}.` : '';
+  if (!nextMeal || isLateDay()) {
+    return `${prefix}You're ${ctx.remaining.kcal} kcal and ${ctx.remaining.protein}g protein short. Day is late. Do Bulk Rescue: banana + peanut butter shake + 2 eggs + roti/dal. Tomorrow starts with Breakfast.`;
+  }
+  const mealLine = ` Next scheduled meal: ${cleanMealName(nextMeal.name)} at ${fmt12(nextMeal.timeVal)}.`;
   return `${prefix}You're ${ctx.remaining.kcal} kcal and ${ctx.remaining.protein}g protein short. Eat ${combo}. No random snacking.${mealLine}`;
 }
 
@@ -193,6 +228,9 @@ function getMissedMealRecovery(detail = '') {
   const missed = ctx.missedMeals.length
     ? ctx.missedMeals.map(m => cleanMealName(m.name)).join(', ')
     : detail || 'no meal confirmed missed yet';
+  if (isLateDay()) {
+    return `${COACH_NAME}: Late-day recovery: don't force a full breakfast/lunch now. Take liquid calories first: banana + peanut butter shake. Add 2 eggs if possible. Small dal/rice or 1-2 roti only if hungry. Tomorrow fix the first missed meal.`;
+  }
   const combo = getFoodCombo(ctx.remaining, detail.toLowerCase());
   return `${COACH_NAME}: Recovery plan: ${missed}. Add ${combo}. Drink 500ml water now. Log it when done, not later.`;
 }
@@ -229,6 +267,12 @@ function getBulkRescuePlan(detail = '') {
     return `${COACH_NAME}: No rescue needed yet. Stay on schedule and finish the next meal.`;
   }
   const full = detail.toLowerCase().includes('full');
+  if (isLateDay()) {
+    const nightPlan = full
+      ? ['Banana + peanut butter shake', '2 eggs only if you can handle it', 'curd or milk before sleep']
+      : ['Banana + peanut butter shake', '2 eggs', 'Small dal/rice or 1-2 roti if hungry'];
+    return `${COACH_NAME}: Night Rescue:\n1. ${nightPlan[0]}\n2. ${nightPlan[1]}\n3. ${nightPlan[2]}\nMinimum target: reduce the damage, not force 3000 kcal at midnight. Tomorrow starts with Breakfast.`;
+  }
   const plan = full
     ? ['banana + peanut butter shake', '2 eggs later', 'curd or milk before sleep']
     : ['2 banana + peanut butter shake', '2 eggs', '1 roti with dal'];
@@ -239,11 +283,19 @@ function getBulkRescuePlan(detail = '') {
 function getStartupCoachBrief() {
   const ctx = getCoachContext();
   const missedNames = ctx.missedMeals.map(m => cleanMealName(m.name));
+  const next = getNextPendingMeal();
+  if (isLateDay()) {
+    if (ctx.doneMeals.length === 0 && state.meals.length > 0) {
+      return `${COACH_NAME}: No pretending - today is a 0/100 so far. Don't eat breakfast now. Do a small night rescue if you can, then restart tomorrow with Breakfast.`;
+    }
+    if (ctx.remaining.kcal > 500 || ctx.remaining.protein > 20 || missedNames.length) {
+      return `${COACH_NAME}: Day is almost over. ${missedNames.length ? `You missed ${missedNames.join(', ')}. ` : ''}You're ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein short. Do Night Rescue: banana + peanut butter shake, 2 eggs, dal/rice or roti. Tomorrow, breakfast is the first fix.`;
+    }
+  }
   if (missedNames.length || ctx.remaining.kcal > 500 || ctx.remaining.protein > 20) {
     const combo = getFoodCombo(ctx.remaining);
-    return `${COACH_NAME}: ${missedNames.length ? `You missed ${missedNames.join(', ')} and ` : ''}you're ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein short. Fix it now: ${combo}.`;
+    return `${COACH_NAME}: ${missedNames.length ? `You missed ${missedNames.join(', ')} and ` : ''}you're ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein short.${next ? ` Next meal: ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}.` : ''} Fix with ${combo}.`;
   }
-  const next = getNextPendingMeal();
   return next
     ? `${COACH_NAME}: Good start. Stay on schedule - next meal is ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}.`
     : `${COACH_NAME}: Good work. All meals are checked. Keep water on target.`;
