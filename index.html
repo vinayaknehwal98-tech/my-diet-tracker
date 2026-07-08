@@ -3599,6 +3599,16 @@ async function estimateSnapMeal() {
     return result;
   } catch (err) {
     if (snapImageData) {
+      if (desc) {
+        const fallback = estimateSnapMealLocally(desc);
+        if (fallback.kcal > 20) {
+          fallback.needsReview = true;
+          renderSnapResult(fallback);
+          setSnapStatus('success', 'Used text fallback. Review before saving.');
+          return fallback;
+        }
+      }
+
       document.getElementById('snapResult').style.display = 'none';
       document.getElementById('snapActions').style.display = 'none';
       setSnapStatus('error', "AI could not estimate this photo. Add text like 'burger + fries' and try again.");
