@@ -164,6 +164,22 @@ function exposeGlobals() {
     closeAI,
     sendAI,
     executeAIAction,
+    getCoachContext,
+    getCoachDailyReport,
+    getRemainingMacros,
+    getMealConsistency,
+    getNextMealSuggestion,
+    getMissedMealRecovery,
+    getEndOfDayReport,
+    getWeeklyCoachReview,
+    getBulkRescuePlan,
+    handleCoachQuickAction,
+    addCoachMessage,
+    getFoodScanCoachNote,
+    getStartupCoachBrief,
+    showStartupCoachBrief,
+    dismissStartupCoachBrief,
+    openCoachFromBrief,
     editCurrentWeight,
     editStartWeight,
     editGoalWeight,
@@ -184,4 +200,5 @@ function exposeGlobals() {
 // --- INIT ---
 exposeGlobals();
 renderAll();
+showStartupCoachBrief();
 initReminders();

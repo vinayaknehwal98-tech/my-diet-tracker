@@ -332,13 +332,20 @@
       <div class="ai-header-left">
         <div class="ai-avatar">🤖</div>
         <div>
-          <div class="ai-title">Diet Assistant</div>
-          <div class="ai-sub">Can read & control your app</div>
+          <div class="ai-title">X</div>
+          <div class="ai-sub">Strict bulking coach · reads your diet</div>
         </div>
       </div>
       <button class="ai-close" onclick="closeAI()">✕</button>
     </div>
     <div class="ai-messages" id="aiMessages"></div>
+    <div class="ai-quick-actions">
+      <button onclick="handleCoachQuickAction('eat_now')">What should I eat now?</button>
+      <button onclick="handleCoachQuickAction('judge_day')">Judge my day</button>
+      <button onclick="handleCoachQuickAction('recover_missed')">Recover missed meal</button>
+      <button onclick="handleCoachQuickAction('weekly_review')">Weekly review</button>
+      <button onclick="handleCoachQuickAction('bulk_rescue')">Bulk Rescue</button>
+    </div>
     <div class="ai-input-row">
       <textarea class="ai-input" id="aiInput" placeholder="Ask anything or give a command..." rows="1"
         onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();sendAI()}"
