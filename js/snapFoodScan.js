@@ -535,6 +535,9 @@ function logSnapEntryFromPreview(swapMealId) {
   saveState();
   closeSnapModal();
   renderAll();
+  if (typeof window.getFoodScanCoachNote === 'function' && typeof window.addCoachMessage === 'function') {
+    window.addCoachMessage(window.getFoodScanCoachNote(food));
+  }
   showToast(swapMealName ? `Logged swap for ${swapMealName} - ${food.kcal} kcal added` : `Extra meal logged - ${food.kcal} kcal added`);
 }
 
