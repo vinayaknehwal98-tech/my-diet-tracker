@@ -84,8 +84,14 @@ function getCoachContext() {
     carbs: doneMeals.reduce((a, m) => a + (m.carbs || 0), 0) + extras.reduce((a, e) => a + (e.carbs || 0), 0),
     fat: doneMeals.reduce((a, m) => a + (m.fat || 0), 0) + extras.reduce((a, e) => a + (e.fat || 0), 0)
   };
-  const missedMeals = state.meals.filter(m => isMealMissed(m) && !isMealDone(m.id));
+  const missedMeals = getCoachMissedMeals();
   const pendingMeals = state.meals.filter(m => !isMealDone(m.id));
+  const currentMinutes = getCurrentMinutes();
+  const dayPhase = getDayPhase();
+  const firstMeal = getFirstMeal();
+  const lastMeal = getLastMeal();
+  const nextMeal = getNextPendingMeal();
+  console.log('X day phase', { currentMinutes, dayPhase, firstMeal, lastMeal, nextMeal, missedMeals });
   return {
     doneMeals,
     extras,
@@ -99,6 +105,10 @@ function getCoachContext() {
     },
     missedMeals,
     pendingMeals,
+    dayPhase,
+    firstMeal,
+    lastMeal,
+    nextMeal,
     water: getWaterCount(),
     waterGoal: getRemindersState().waterGoalGlasses || 8
   };
@@ -153,6 +163,11 @@ function cleanMealName(name) {
   return String(name || '').replace(/^[^\w\s]*\s*/, '').trim();
 }
 
+function getCurrentMinutes() {
+  const now = new Date();
+  return now.getHours() * 60 + now.getMinutes();
+}
+
 function mealTimeToMinutes(meal) {
   const val = String(meal?.timeVal || '').trim();
   let match = val.match(/^(\d{1,2}):(\d{2})$/);
@@ -160,7 +175,7 @@ function mealTimeToMinutes(meal) {
 
   const label = String(meal?.timeLabel || '').trim();
   match = label.match(/(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?/i);
-  if (!match) return 24 * 60;
+  if (!match) return null;
   let hour = Number(match[1]);
   const minute = Number(match[2] || 0);
   const meridiem = String(match[3] || '').toUpperCase();
@@ -169,31 +184,127 @@ function mealTimeToMinutes(meal) {
   return (hour * 60) + minute;
 }
 
-function getCurrentMinutes() {
-  const now = new Date();
-  return now.getHours() * 60 + now.getMinutes();
+function getSortedMealsByTime() {
+  return [...(state.meals || [])]
+    .map(meal => ({ meal, minutes: mealTimeToMinutes(meal) }))
+    .filter(item => item.minutes !== null && Number.isFinite(item.minutes))
+    .sort((a, b) => a.minutes - b.minutes)
+    .map(item => item.meal);
+}
+
+function getFirstMeal() {
+  return getSortedMealsByTime()[0] || null;
+}
+
+function getLastMeal() {
+  const meals = getSortedMealsByTime();
+  return meals[meals.length - 1] || null;
+}
+
+function getDayPhase() {
+  const currentMinutes = getCurrentMinutes();
+  const firstMeal = getFirstMeal();
+  const lastMeal = getLastMeal();
+  const firstMealMinutes = mealTimeToMinutes(firstMeal);
+  const lastMealMinutes = mealTimeToMinutes(lastMeal);
+
+  if (firstMealMinutes !== null && currentMinutes < firstMealMinutes) return 'before_first_meal';
+  if (lastMealMinutes !== null && (currentMinutes > lastMealMinutes || currentMinutes >= (21 * 60 + 30))) return 'late_day';
+  return 'active_day';
 }
 
 function getNextPendingMeal() {
-  const pending = state.meals.filter(m => !isMealDone(m.id));
   const currentMinutes = getCurrentMinutes();
-  const upcomingPendingMeals = pending
-    .filter(m => mealTimeToMinutes(m) >= currentMinutes)
-    .sort((a, b) => mealTimeToMinutes(a) - mealTimeToMinutes(b));
-  const nextMeal = upcomingPendingMeals[0] || null;
-  const lastMealMinutes = getLastMealMinutes();
-  const lateDay = currentMinutes > lastMealMinutes || currentMinutes >= (21 * 60 + 30);
-  console.log('X time context', { currentMinutes, nextMeal, lateDay });
-  return nextMeal;
+  return getSortedMealsByTime()
+    .filter(m => !isMealDone(m.id))
+    .filter(m => {
+      const minutes = mealTimeToMinutes(m);
+      return minutes !== null && minutes >= currentMinutes;
+    })[0] || null;
 }
 
 function getLastMealMinutes() {
-  return Math.max(...state.meals.map(mealTimeToMinutes).filter(Number.isFinite), 0);
+  const lastMealMinutes = mealTimeToMinutes(getLastMeal());
+  return lastMealMinutes === null ? 0 : lastMealMinutes;
 }
 
 function isLateDay() {
+  return getDayPhase() === 'late_day';
+}
+
+function getCoachMissedMeals() {
+  const dayPhase = getDayPhase();
+  if (dayPhase === 'before_first_meal') return [];
   const currentMinutes = getCurrentMinutes();
-  return currentMinutes > getLastMealMinutes() || currentMinutes >= (21 * 60 + 30);
+  return (state.meals || []).filter(meal => {
+    const mealMinutes = mealTimeToMinutes(meal);
+    return mealMinutes !== null
+      && currentMinutes > mealMinutes + 30
+      && !isMealDone(meal.id);
+  });
+}
+
+function getMealFoodItems(meal) {
+  if (Array.isArray(meal?.items)) return meal.items;
+  if (Array.isArray(meal?.foods)) return meal.foods;
+  if (Array.isArray(meal?.foodItems)) return meal.foodItems;
+  return [];
+}
+
+function formatMealFoodsForCoach(meal) {
+  const foods = getMealFoodItems(meal);
+  const formatted = foods
+    .map(food => {
+      const name = String(food?.name || food?.food || '').trim();
+      const qty = String(food?.qty || food?.quantity || food?.amount || '').trim();
+      return name ? `${name}${qty ? ` ${qty}` : ''}` : '';
+    })
+    .filter(Boolean);
+
+  const result = formatted.length ? formatted.join(', ') : 'Food details missing.';
+  console.log('X meal food details:', meal?.name, result);
+  return result;
+}
+
+function mealHasFoodDetails(meal) {
+  return getMealFoodItems(meal).some(food => String(food?.name || food?.food || '').trim());
+}
+
+function getMealPlanSuggestion(meal) {
+  const name = cleanMealName(meal?.name) || 'meal';
+  const total = `Total: ${Number(meal?.kcal) || 0} kcal, ${Number(meal?.protein) || 0}g protein.`;
+  if (mealHasFoodDetails(meal)) {
+    return `Complete ${name}: ${formatMealFoodsForCoach(meal)}. ${total}`;
+  }
+  return `Complete ${name} from your meal card. Food details are missing, so I won't invent them. ${total}`;
+}
+
+function getAlternativeRecoverySuggestion(reason = '') {
+  const detail = String(reason || '').toLowerCase();
+  if (detail.includes('full')) {
+    return 'Alternative recovery: banana + peanut butter shake + curd or milk.';
+  }
+  if (detail.includes('eggs and roti')) {
+    return 'Alternative recovery: 2 eggs + 2 roti + curd or milk.';
+  }
+  return 'Alternative recovery: 2 eggs + 2 roti + banana shake.';
+}
+
+function getNightRescuePlan(prefix = true) {
+  const start = prefix ? `${COACH_NAME}: ` : '';
+  return `${start}Day is almost over. Night Rescue:\n1. Banana + peanut butter shake\n2. 2 eggs\n3. Small dal/rice or 1-2 roti if hungry\nMinimum goal: reduce the damage, not force 3000 kcal at midnight.`;
+}
+
+function getFirstMealLine() {
+  const firstMeal = getFirstMeal();
+  if (!firstMeal) return 'First target: your first saved meal.';
+  return `First target: ${cleanMealName(firstMeal.name)} at ${fmt12(firstMeal.timeVal)}.`;
+}
+
+function getFirstMealIsLine() {
+  const firstMeal = getFirstMeal();
+  if (!firstMeal) return 'First meal is your first saved meal.';
+  return `First meal is ${cleanMealName(firstMeal.name)} at ${fmt12(firstMeal.timeVal)}.`;
 }
 
 function getFoodCombo(remaining, mode = '') {
@@ -213,33 +324,55 @@ function getFoodCombo(remaining, mode = '') {
 
 function getNextMealSuggestion(includePrefix = true, mode = '') {
   const ctx = getCoachContext();
-  const combo = getFoodCombo(ctx.remaining, mode);
+  const dayPhase = getDayPhase();
   const nextMeal = getNextPendingMeal();
   const prefix = includePrefix ? `${COACH_NAME}: ` : '';
-  if (!nextMeal || isLateDay()) {
-    return `${prefix}You're ${ctx.remaining.kcal} kcal and ${ctx.remaining.protein}g protein short. Day is late. Do Bulk Rescue: banana + peanut butter shake + 2 eggs + roti/dal. Tomorrow starts with Breakfast.`;
+
+  if (dayPhase === 'before_first_meal') {
+    return `${prefix}New day. ${getFirstMealIsLine()} If you're awake and hungry, keep it light or prep ${cleanMealName(getFirstMeal()?.name) || 'the first meal'}. No rescue needed yet.`;
   }
-  const mealLine = ` Next scheduled meal: ${cleanMealName(nextMeal.name)} at ${fmt12(nextMeal.timeVal)}.`;
-  return `${prefix}You're ${ctx.remaining.kcal} kcal and ${ctx.remaining.protein}g protein short. Eat ${combo}. No random snacking.${mealLine}`;
+
+  if (dayPhase === 'late_day' || !nextMeal) {
+    return getNightRescuePlan(includePrefix);
+  }
+
+  return `${prefix}${getMealPlanSuggestion(nextMeal)} Remaining today: ${ctx.remaining.kcal} kcal and ${ctx.remaining.protein}g protein.`;
 }
 
 function getMissedMealRecovery(detail = '') {
   const ctx = getCoachContext();
-  const missed = ctx.missedMeals.length
-    ? ctx.missedMeals.map(m => cleanMealName(m.name)).join(', ')
-    : detail || 'no meal confirmed missed yet';
-  if (isLateDay()) {
-    return `${COACH_NAME}: Late-day recovery: don't force a full breakfast/lunch now. Take liquid calories first: banana + peanut butter shake. Add 2 eggs if possible. Small dal/rice or 1-2 roti only if hungry. Tomorrow fix the first missed meal.`;
+  const dayPhase = getDayPhase();
+  if (dayPhase === 'before_first_meal') {
+    return `${COACH_NAME}: New day. No meals missed yet. ${getFirstMealLine()} No rescue needed yet.`;
   }
-  const combo = getFoodCombo(ctx.remaining, detail.toLowerCase());
-  return `${COACH_NAME}: Recovery plan: ${missed}. Add ${combo}. Drink 500ml water now. Log it when done, not later.`;
+
+  if (dayPhase === 'late_day') {
+    const original = ctx.missedMeals[0]
+      ? `Original missed meal: ${cleanMealName(ctx.missedMeals[0].name)} - ${formatMealFoodsForCoach(ctx.missedMeals[0])}.\n`
+      : '';
+    return `${COACH_NAME}: ${original}${getNightRescuePlan(false)}`;
+  }
+
+  if (ctx.missedMeals.length) {
+    const original = ctx.missedMeals
+      .map(m => `Original missed meal: ${cleanMealName(m.name)} - ${formatMealFoodsForCoach(m)}.`)
+      .join('\n');
+    return `${COACH_NAME}: ${original}\n${getAlternativeRecoverySuggestion(detail)} Drink 500ml water now. Log it when done.`;
+  }
+
+  return `${COACH_NAME}: No meal is confirmed missed yet. ${getNextMealSuggestion(false, detail)}`;
 }
 
 function getEndOfDayReport() {
   const report = getCoachDailyReport();
+  const dayPhase = getDayPhase();
+  if (dayPhase === 'before_first_meal') {
+    return `${COACH_NAME}: Too early to judge the day. New day just started. Score is pending. ${getFirstMealLine()}`;
+  }
   const missed = report.context.missedMeals.map(m => cleanMealName(m.name)).join(', ') || 'none';
   const verdict = report.score >= 85 ? 'bulk-worthy' : report.score >= 70 ? 'not bad, but not locked in' : 'not good enough for visible transformation';
-  return `${COACH_NAME}: Day result: ${report.score}/100. ${verdict}. Calories: ${report.calories}. Protein: ${report.protein}. Missed meals: ${missed}. Tomorrow's fix: finish the first pending meal on time.`;
+  const label = dayPhase === 'active_day' ? 'Current score' : 'Day result';
+  return `${COACH_NAME}: ${label}: ${report.score}/100${dayPhase === 'active_day' ? ' so far' : ''}. ${verdict}. Calories: ${report.calories}. Protein: ${report.protein}. Missed meals: ${missed}. ${dayPhase === 'late_day' ? 'Tomorrow starts with the first planned meal.' : 'Keep the next planned meal on time.'}`;
 }
 
 function getWeeklyCoachReview() {
@@ -263,15 +396,15 @@ function getWeeklyCoachReview() {
 
 function getBulkRescuePlan(detail = '') {
   const ctx = getCoachContext();
+  if (getDayPhase() === 'before_first_meal') {
+    return `${COACH_NAME}: New day. ${getFirstMealLine()} No rescue needed yet.`;
+  }
   if (ctx.remaining.kcal <= 700 && ctx.remaining.protein <= 25) {
     return `${COACH_NAME}: No rescue needed yet. Stay on schedule and finish the next meal.`;
   }
   const full = detail.toLowerCase().includes('full');
   if (isLateDay()) {
-    const nightPlan = full
-      ? ['Banana + peanut butter shake', '2 eggs only if you can handle it', 'curd or milk before sleep']
-      : ['Banana + peanut butter shake', '2 eggs', 'Small dal/rice or 1-2 roti if hungry'];
-    return `${COACH_NAME}: Night Rescue:\n1. ${nightPlan[0]}\n2. ${nightPlan[1]}\n3. ${nightPlan[2]}\nMinimum target: reduce the damage, not force 3000 kcal at midnight. Tomorrow starts with Breakfast.`;
+    return getNightRescuePlan(true);
   }
   const plan = full
     ? ['banana + peanut butter shake', '2 eggs later', 'curd or milk before sleep']
@@ -282,19 +415,19 @@ function getBulkRescuePlan(detail = '') {
 
 function getStartupCoachBrief() {
   const ctx = getCoachContext();
+  const dayPhase = getDayPhase();
   const missedNames = ctx.missedMeals.map(m => cleanMealName(m.name));
   const next = getNextPendingMeal();
-  if (isLateDay()) {
-    if (ctx.doneMeals.length === 0 && state.meals.length > 0) {
-      return `${COACH_NAME}: No pretending - today is a 0/100 so far. Don't eat breakfast now. Do a small night rescue if you can, then restart tomorrow with Breakfast.`;
-    }
+  if (dayPhase === 'before_first_meal') {
+    return `${COACH_NAME}: New day. No meals missed yet. ${getFirstMealLine()} Stay ready.`;
+  }
+  if (dayPhase === 'late_day') {
     if (ctx.remaining.kcal > 500 || ctx.remaining.protein > 20 || missedNames.length) {
-      return `${COACH_NAME}: Day is almost over. ${missedNames.length ? `You missed ${missedNames.join(', ')}. ` : ''}You're ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein short. Do Night Rescue: banana + peanut butter shake, 2 eggs, dal/rice or roti. Tomorrow, breakfast is the first fix.`;
+      return `${COACH_NAME}: Day is almost over. ${missedNames.length ? `You missed ${missedNames.join(', ')}. ` : ''}You're ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein short.\n${getNightRescuePlan(false)}`;
     }
   }
   if (missedNames.length || ctx.remaining.kcal > 500 || ctx.remaining.protein > 20) {
-    const combo = getFoodCombo(ctx.remaining);
-    return `${COACH_NAME}: ${missedNames.length ? `You missed ${missedNames.join(', ')} and ` : ''}you're ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein short.${next ? ` Next meal: ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}.` : ''} Fix with ${combo}.`;
+    return `${COACH_NAME}: ${missedNames.length ? `Missed so far: ${missedNames.join(', ')}. ` : ''}Progress: ${ctx.remaining.kcal} kcal / ${ctx.remaining.protein}g protein remaining.${next ? ` Next meal: ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}. ${getMealPlanSuggestion(next)}` : ''}`;
   }
   return next
     ? `${COACH_NAME}: Good start. Stay on schedule - next meal is ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}.`
@@ -355,6 +488,7 @@ function getFoodScanCoachNote(meal) {
 
 function handleCoachQuickAction(action, detail = '') {
   console.log('X quick action:', action);
+  console.log('X local response used:', `quick_${action}`);
   const map = {
     eat_now: () => getNextMealSuggestion(true, detail),
     judge_day: () => getEndOfDayReport(),
@@ -369,19 +503,77 @@ function handleCoachQuickAction(action, detail = '') {
 
 function getLocalCoachResponse(text) {
   const t = text.toLowerCase();
-  if (t.includes('what should i eat now')) return getNextMealSuggestion();
-  if (t.includes('judge my day')) return getEndOfDayReport();
-  if (t.includes('weekly review')) return getWeeklyCoachReview();
-  if (t.includes('recover') || t.includes('i missed')) return getMissedMealRecovery(text);
-  if (t.includes('feel full')) return getBulkRescuePlan('full');
-  if (t.includes('only have eggs and roti')) return getNextMealSuggestion(true, 'eggs and roti');
-  if (t.includes('plan my remaining day')) return `${getNextMealSuggestion()}\n${getMissedMealRecovery(text)}`;
-  if (t.includes('before gym')) return `${COACH_NAME}: Before gym at ${coachProfile.gymTime}: banana + peanut butter or oats, then water. Keep it digestible.`;
-  if (t.includes('after gym')) return `${COACH_NAME}: After gym: whey if unused, then dal/rice or eggs/roti. Protein first, calories second.`;
-  if (t.includes('protein left')) return `${COACH_NAME}: ${getRemainingMacros().protein}g protein left. Hit it with eggs, dal, curd, or one whey scoop.`;
-  if (t.includes('calories left')) return `${COACH_NAME}: ${getRemainingMacros().kcal} kcal left. Use banana, peanut butter, roti, rice, milk. No empty excuses.`;
-  if (t.includes('bulk rescue')) return getBulkRescuePlan(text);
+  if (/^(hi|hii|hello|hey|yo|good morning|good evening)[!.\s]*$/i.test(text.trim())) {
+    console.log('X local response used:', 'greeting');
+    const ctx = getCoachContext();
+    if (ctx.dayPhase === 'before_first_meal') {
+      return `${COACH_NAME}: I'm here. New day started. No meals missed yet. ${getFirstMealLine()}`;
+    }
+    if (ctx.dayPhase === 'late_day') {
+      return getNightRescuePlan(true);
+    }
+    const next = ctx.nextMeal;
+    return next
+      ? `${COACH_NAME}: I'm here. Progress: ${ctx.consumed.kcal}/${ctx.totals.kcal} kcal, ${ctx.consumed.protein}/${ctx.totals.protein}g protein. Next meal: ${cleanMealName(next.name)} at ${fmt12(next.timeVal)}.`
+      : `${COACH_NAME}: I'm here. No upcoming planned meals left today. Keep water on target.`;
+  }
+  const localActions = [
+    { match: t.includes('what should i eat now'), reason: 'eat_now', response: () => getNextMealSuggestion() },
+    { match: t.includes('judge my day'), reason: 'judge_day', response: () => getEndOfDayReport() },
+    { match: t.includes('weekly review'), reason: 'weekly_review', response: () => getWeeklyCoachReview() },
+    { match: t.includes('recover') || t.includes('i missed'), reason: 'recover_missed', response: () => getMissedMealRecovery(text) },
+    { match: t.includes('feel full'), reason: 'bulk_rescue_full', response: () => getBulkRescuePlan('full') },
+    { match: t.includes('only have eggs and roti'), reason: 'eggs_roti', response: () => getNextMealSuggestion(true, 'eggs and roti') },
+    { match: t.includes('plan my remaining day'), reason: 'remaining_day', response: () => `${getNextMealSuggestion()}\n${getMissedMealRecovery(text)}` },
+    { match: t.includes('before gym'), reason: 'before_gym', response: () => `${COACH_NAME}: Before gym at ${coachProfile.gymTime}: banana + peanut butter or oats, then water. Keep it digestible.` },
+    { match: t.includes('after gym'), reason: 'after_gym', response: () => `${COACH_NAME}: After gym: whey if unused, then dal/rice or eggs/roti. Protein first, calories second.` },
+    { match: t.includes('protein left'), reason: 'protein_left', response: () => `${COACH_NAME}: ${getRemainingMacros().protein}g protein left. Use saved meals first. Backup option: eggs, dal, curd, or one whey scoop.` },
+    { match: t.includes('calories left'), reason: 'calories_left', response: () => `${COACH_NAME}: ${getRemainingMacros().kcal} kcal left. Use saved meals first. Backup option: banana, peanut butter, roti, rice, milk.` },
+    { match: t.includes('bulk rescue'), reason: 'bulk_rescue', response: () => getBulkRescuePlan(text) }
+  ];
+  const action = localActions.find(item => item.match);
+  if (action) {
+    console.log('X local response used:', action.reason);
+    return action.response();
+  }
   return null;
+}
+
+function getMealPlanFoodNames() {
+  return (state.meals || [])
+    .flatMap(getMealFoodItems)
+    .map(food => String(food?.name || food?.food || '').toLowerCase())
+    .filter(Boolean);
+}
+
+function lineIsLabeledAlternative(line) {
+  return /alternative recovery|backup option/i.test(line);
+}
+
+function aiResponseNeedsSafetyFallback(text) {
+  const response = String(text || '');
+  const mealFoods = getMealPlanFoodNames();
+  const blocked = ['egg whites', 'chicken', 'fish', 'beef', 'mutton', 'paneer'];
+  return response.split(/\n+/).some(line => {
+    if (lineIsLabeledAlternative(line)) return false;
+    const lower = line.toLowerCase();
+    return blocked.some(food => lower.includes(food) && !mealFoods.some(saved => saved.includes(food)));
+  });
+}
+
+function getDeterministicCoachFallback(reason = 'ai_safety_filter') {
+  console.log('X local response used:', reason);
+  const ctx = getCoachContext();
+  if (ctx.dayPhase === 'before_first_meal') {
+    return `${COACH_NAME}: New day. No meals missed yet. ${getFirstMealLine()} Stay ready.`;
+  }
+  if (ctx.dayPhase === 'late_day') {
+    return getNightRescuePlan(true);
+  }
+  if (ctx.nextMeal) {
+    return `${COACH_NAME}: ${getMealPlanSuggestion(ctx.nextMeal)} ${ctx.missedMeals.length ? getAlternativeRecoverySuggestion('missed meal') : 'No alternative needed unless recovery is required.'}`;
+  }
+  return getMissedMealRecovery();
 }
 
 function getAppContext() {
@@ -407,10 +599,12 @@ CURRENT APP STATE:
 - Current weight: ${getCurrentWeight()} kg
 - Goal weight: ${getGoalWeight()} kg
 - Streak: ${getCurrentStreak()} days
+- Day phase: ${ctx.dayPhase}
+- Next upcoming meal: ${ctx.nextMeal ? `${cleanMealName(ctx.nextMeal.name)} at ${fmt12(ctx.nextMeal.timeVal)}` : 'none'}
 - Missed meals: ${ctx.missedMeals.map(m => cleanMealName(m.name)).join(', ') || 'none'}
 
 MEAL PLAN:
-${state.meals.map(m => `- ${m.name} (${m.timeLabel}): ${m.kcal} kcal, ${m.protein}g protein | ${isMealDone(m.id) ? 'DONE' : 'pending'}`).join('\n')}
+${state.meals.map(m => `- ${m.name} (${m.timeLabel || fmt12(m.timeVal)}): ${m.kcal} kcal, ${m.protein}g protein, ${m.carbs || 0}g carbs, ${m.fat || 0}g fat | Foods: ${formatMealFoodsForCoach(m)} | ${isMealDone(m.id) ? 'DONE' : 'pending'}`).join('\n')}
 
 EXTRA MEALS TODAY:
 ${ctx.extras.length ? ctx.extras.map(e=>`- ${e.name}: ${e.kcal} kcal, ${e.protein || 0}g protein`).join('\n') : 'None'}
@@ -420,6 +614,7 @@ STYLE:
 - Strict, direct, useful.
 - Give exact next actions.
 - Never use any previous coach name.
+- Never present alternative foods as the saved meal. Saved meal foods must come only from MEAL PLAN. Alternatives are allowed only when clearly labeled as Alternative recovery or Backup option.
 - Keep replies under 80 words unless asked for detail.`;
 }
 
@@ -467,7 +662,11 @@ async function sendAI() {
       try { executeAIAction(JSON.parse(actionMatch[1].trim())); } catch(e) {}
     }
 
-    addCoachMessage(displayText || 'Action done. Stay locked in.');
+    const safeText = aiResponseNeedsSafetyFallback(displayText)
+      ? getDeterministicCoachFallback('ai_safety_filter')
+      : displayText;
+
+    addCoachMessage(safeText || 'Action done. Stay locked in.');
   } catch(err) {
     thinking.remove();
     addCoachMessage('Worker failed. Local coach still works: hit calories, hit protein, drink water, complete the next meal.');

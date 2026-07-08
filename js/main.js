@@ -198,7 +198,7 @@ function exposeGlobals() {
 
 
 // --- INIT ---
-console.log('Diet Tracker version: x-coach-2');
+console.log('Diet Tracker version: x-coach-time-accuracy-1');
 exposeGlobals();
 renderAll();
 setTimeout(() => {
