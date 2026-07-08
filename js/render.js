@@ -22,6 +22,11 @@ function renderAll() {
   else if (activeTab === 'reminders') {
     main.innerHTML = renderReminders();
   }
+  else if (activeTab === 'workout') {
+    main.innerHTML = typeof renderWorkout === 'function'
+      ? renderWorkout()
+      : '<div class="meal-card"><div class="meal-header"><div class="meal-title">Workout tracker unavailable.</div></div></div>';
+  }
   else if (activeTab === 'export') {
     main.innerHTML = renderExport();
   }
