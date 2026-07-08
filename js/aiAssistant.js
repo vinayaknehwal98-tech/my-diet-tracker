@@ -523,7 +523,9 @@ function getWorkoutProgressiveOverloadResponse(text = '') {
   const exercise = workout.exercises.find(ex => query.includes(ex.name.toLowerCase())) || status.priorityLift || workout.exercises[0];
   const last = getLastExercisePerformance(exercise.id);
   const suggestion = getProgressiveOverloadSuggestion(exercise, getExerciseHistory(exercise.id));
-  return `${COACH_NAME}: Start with ${exercise.name}. ${last ? `Last time: ${formatWorkoutPerformance(last)}. ` : ''}${suggestion.status}: ${suggestion.reason} Target: ${suggestion.nextTarget}${suggestion.warning ? ` Warning: ${suggestion.warning}` : ''}`;
+  const pattern = last?.pattern ? ` Pattern: ${String(last.pattern).replace(/_/g, ' ')}.` : '';
+  const backoff = last?.backoffPerformance?.summary ? ` Back-off: ${last.backoffPerformance.summary}.` : '';
+  return `${COACH_NAME}: Start with ${exercise.name}. ${last ? `Last time: ${formatWorkoutPerformance(last)}.${pattern}${backoff} ` : ''}${suggestion.status}: ${suggestion.reason} Target: ${suggestion.nextTarget}${suggestion.warning ? ` Warning: ${suggestion.warning}` : ''}`;
 }
 
 function getDidIGetStrongerResponse() {
@@ -531,10 +533,43 @@ function getDidIGetStrongerResponse() {
   const memory = typeof inferUserPatterns === 'function' ? inferUserPatterns() : null;
   const status = getTodayWorkoutStatus();
   if (status.workout.rest) return `${COACH_NAME}: Rest day. Getting stronger today means recovering properly.`;
-  if (!status.currentVolume) return `${COACH_NAME}: Not judged yet. Log weights and reps first, then I can compare volume, reps, and load.`;
-  if (status.volumeDelta > 0) return `${COACH_NAME}: Yes. Volume is up by ${Math.round(status.volumeDelta)}. Strong trend: ${memory?.strongestExercises?.[0]?.name || "today's logged work"}. Now recover and hit protein.`;
+  const ctx = getWorkoutCoachContext();
+  const comparison = ctx.performanceComparison;
+  const top = ctx.topSet;
+  const pattern = String(ctx.setPattern || 'straight_sets').replace(/_/g, ' ');
+  if (!status.currentVolume && !top) return `${COACH_NAME}: Not judged yet. Log weights and reps for each set first, then I can compare top set, back-off sets, volume, and reps.`;
+  if (comparison?.topImproved && comparison?.backoffDropped) return `${COACH_NAME}: Mixed progress. Your top set improved, but back-off sets dropped. Keep load similar and improve consistency before adding more.`;
+  if (comparison?.improved || status.volumeDelta > 0) return `${COACH_NAME}: Yes. Pattern: ${pattern}. ${top ? `Top set: ${top.weight || 0}kg x ${top.reps || 0}. ` : ''}Volume is ${Math.round(status.volumeDelta)} vs last session. Now recover and hit protein.`;
   if (memory?.plateauExercises?.[0]?.count >= 3) return `${COACH_NAME}: Strength trend is mixed. ${memory.plateauExercises[0].name} is plateaued. Fix recovery/form before chasing load.`;
   return `${COACH_NAME}: Not yet. Match last session first, then add one rep or cleaner reps before adding weight.`;
+}
+
+function getWorkoutSetReviewResponse() {
+  if (!hasWorkoutCoach()) return `${COACH_NAME}: Workout tracker is not loaded yet.`;
+  const ctx = getWorkoutCoachContext();
+  const top = ctx.topSet;
+  const pattern = String(ctx.setPattern || 'none').replace(/_/g, ' ');
+  if (!top) return `${COACH_NAME}: I need logged set rows before reviewing the workout. Enter weight, reps, RIR, and done for each set.`;
+  const backoff = ctx.backoffPerformance?.summary || 'none';
+  const delta = ctx.performanceComparison ? ` Volume delta: ${Math.round(ctx.performanceComparison.volumeDelta)}. Reps delta: ${ctx.performanceComparison.repsDelta}.` : '';
+  const verdict = ctx.performanceComparison?.topImproved && ctx.performanceComparison?.backoffDropped
+    ? 'Top set improved, but back-off quality dropped. Keep load similar and fix consistency.'
+    : ctx.improvedVsLast
+      ? 'Progress is up. Protect form and recover.'
+      : 'Match this before chasing more load.';
+  return `${COACH_NAME}: ${ctx.priorityLift}: ${pattern}. Top set ${top.weight || 0}kg x ${top.reps || 0}. Back-off: ${backoff}.${delta} ${verdict}`;
+}
+
+function getLastWorkoutSessionResponse() {
+  if (!hasWorkoutCoach()) return `${COACH_NAME}: Workout tracker is not loaded yet.`;
+  const ctx = getWorkoutCoachContext();
+  const suggestions = ctx.progressiveOverloadSuggestions || [];
+  const best = suggestions.find(item => item.topSet) || suggestions[0];
+  if (!best?.topSet) return `${COACH_NAME}: I do not have a previous set-by-set session yet. Log the next workout and I will compare it.`;
+  const pattern = String(best.setPattern || 'straight_sets').replace(/_/g, ' ');
+  const backoff = best.backoffPerformance?.summary || 'none';
+  const volume = best.totalVolume ? Math.round(best.totalVolume) : 'bodyweight/reps';
+  return `${COACH_NAME}: Last key session: ${best.exercise}. Pattern: ${pattern}. Top set ${best.topSet.weight || 0}kg x ${best.topSet.reps || 0}. Back-off: ${backoff}. Total reps ${best.totalReps}, volume ${volume}. ${best.improvedVsLast ? 'Improved vs prior session.' : 'Use it as the target to beat.'}`;
 }
 
 function getWorkoutMissedResponse() {
@@ -696,6 +731,8 @@ function getLocalWorkoutCoachResponse(text) {
     { match: t.includes('what workout today') || t.includes('what should i train today') || t.includes('workout today') || t.includes('should i train today'), reason: 'workout_today', response: () => getWorkoutTodayResponse() },
     { match: t.includes('progressive overload') || t.includes('next weight'), reason: 'progressive_overload', response: () => getWorkoutProgressiveOverloadResponse(text) },
     { match: t.includes('did i get stronger'), reason: 'did_i_get_stronger', response: () => getDidIGetStrongerResponse() },
+    { match: t.includes('how was my workout'), reason: 'workout_set_review', response: () => getWorkoutSetReviewResponse() },
+    { match: t.includes('what happened in my last session') || t.includes('last session'), reason: 'last_workout_session', response: () => getLastWorkoutSessionResponse() },
     { match: t.includes('workout review'), reason: 'workout_review', response: () => {
       if (!hasWorkoutCoach()) return `${COACH_NAME}: Workout tracker is not loaded yet.`;
       const review = getWorkoutWeeklyReview();
@@ -823,7 +860,11 @@ ${workoutCtx ? `- Today's workout: ${workoutCtx.todayWorkout.name} (${workoutCtx
 - Pending exercises: ${workoutCtx.pendingExercises.join(', ') || 'none'}
 - Priority lift: ${workoutCtx.priorityLift}
 - Last priority performance: ${workoutCtx.lastPerformance ? formatWorkoutPerformance(workoutCtx.lastPerformance) : 'none'}
-- Progressive overload suggestions: ${workoutCtx.progressiveOverloadSuggestions.map(item => `${item.exercise}: ${item.suggestion.status} - ${item.suggestion.nextTarget}${item.suggestion.warning ? ' / ' + item.suggestion.warning : ''}`).join(' | ')}
+- Priority set pattern: ${workoutCtx.setPattern || 'none'}
+- Priority top set: ${workoutCtx.topSet ? `${workoutCtx.topSet.weight || 0}kg x ${workoutCtx.topSet.reps || 0}` : 'none'}
+- Priority back-off performance: ${workoutCtx.backoffPerformance?.summary || 'none'}
+- Priority totals: ${workoutCtx.totalReps || 0} reps, ${workoutCtx.totalVolume ? Math.round(workoutCtx.totalVolume) : 0} volume, improved vs last: ${workoutCtx.improvedVsLast ? 'yes' : 'no'}
+- Progressive overload suggestions: ${workoutCtx.progressiveOverloadSuggestions.map(item => `${item.exercise}: ${item.suggestion.status} - ${item.suggestion.nextTarget}${item.suggestion.warning ? ' / ' + item.suggestion.warning : ''} | pattern ${item.setPattern || 'none'} | top ${item.topSet ? `${item.topSet.weight || 0}kg x ${item.topSet.reps || 0}` : 'none'} | reps ${item.totalReps || 0} | volume ${item.totalVolume ? Math.round(item.totalVolume) : 0} | improved ${item.improvedVsLast ? 'yes' : 'no'}`).join(' | ')}
 - Weekly workout consistency: ${workoutCtx.weeklyWorkoutConsistency.summary}` : 'Workout tracker unavailable.'}
 
 X MEMORY:
