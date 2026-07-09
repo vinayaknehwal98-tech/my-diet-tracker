@@ -148,6 +148,8 @@ function exposeGlobals() {
     compressSnapImage,
     onSnapDescInput,
     estimateSnapMeal,
+    estimateSnapFromDescription,
+    retrySnapPhotoScan,
     renderSnapResult,
     logSnapAsExtra,
     logSnapAsSwap,
@@ -259,7 +261,7 @@ function exposeGlobals() {
 
 
 // --- INIT ---
-console.log("Diet Tracker version: food-scan-edit-qty-1");
+console.log("Diet Tracker version: photo-scan-fallback-1");
 exposeGlobals();
 renderAll();
 setTimeout(() => {
