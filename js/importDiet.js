@@ -1,6 +1,238 @@
 // --- IMPORT DIET ---
 let importedMeals = null;
 
+const IMPORT_DIET_EMPTY_MESSAGE = 'No valid meals found. Paste clearer diet text or try again.';
+const IMPORT_DIET_IMAGE_EMPTY_MESSAGE = 'Import failed: no foods/macros detected.';
+
+function importNumber(value) {
+  if (value === '' || value === null || typeof value === 'undefined') return 0;
+  const number = Number(String(value).replace(/[^\d.-]/g, ''));
+  return Number.isFinite(number) && number > 0 ? number : 0;
+}
+
+function slugifyDietId(value, fallback = 'meal') {
+  const slug = String(value || '')
+    .toLowerCase()
+    .replace(/^[^\w\s]+/g, '')
+    .replace(/[^a-z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+  return slug || fallback;
+}
+
+function parseImportTime(value) {
+  const text = String(value || '');
+  const match = text.match(/\b(\d{1,2})(?::(\d{2}))?\s*(am|pm)?\b/i);
+  if (!match) return '';
+  let hour = Number(match[1]);
+  const minute = Number(match[2] || 0);
+  const meridiem = (match[3] || '').toLowerCase();
+  if (hour > 23 || minute > 59) return '';
+  if (meridiem === 'pm' && hour < 12) hour += 12;
+  if (meridiem === 'am' && hour === 12) hour = 0;
+  return `${String(hour).padStart(2, '0')}:${String(minute).padStart(2, '0')}`;
+}
+
+function mealEmojiForName(name) {
+  const text = String(name || '').toLowerCase();
+  if (/breakfast|morning/.test(text)) return 'ðŸŒ…';
+  if (/lunch|noon/.test(text)) return 'ðŸ›';
+  if (/snack|evening/.test(text)) return 'ðŸ¥¤';
+  if (/pre.?workout/.test(text)) return 'ðŸ‹ï¸';
+  if (/dinner|night/.test(text)) return 'ðŸ½ï¸';
+  return 'ðŸ½ï¸';
+}
+
+function stripMealEmoji(name) {
+  return String(name || '').replace(/^[^\w\s]+/g, '').trim();
+}
+
+function normalizeImportedFood(food = {}) {
+  const name = String(food.name || food.food || food.item || '').trim();
+  const qty = String(food.qty || food.quantity || food.amount || '').trim();
+  const cal = importNumber(food.cal ?? food.kcal ?? food.calories ?? food.energy);
+  const pro = importNumber(food.pro ?? food.protein ?? food.p);
+  const carbs = importNumber(food.carbs ?? food.carb ?? food.c);
+  const fat = importNumber(food.fat ?? food.f);
+  return { name, qty, cal, pro, carbs, fat };
+}
+
+function isValidImportedFood(food = {}) {
+  const normalized = normalizeImportedFood(food);
+  return !!normalized.name && (normalized.cal > 0 || normalized.pro > 0);
+}
+
+function calculateMealTotalsFromFoods(meal = {}) {
+  const foods = (Array.isArray(meal.foods) ? meal.foods : [])
+    .map(normalizeImportedFood)
+    .filter(isValidImportedFood);
+  return {
+    kcal: foods.reduce((sum, food) => sum + food.cal, 0),
+    protein: foods.reduce((sum, food) => sum + food.pro, 0),
+    carbs: foods.reduce((sum, food) => sum + food.carbs, 0),
+    fat: foods.reduce((sum, food) => sum + food.fat, 0),
+    foods
+  };
+}
+
+function normalizeImportedMeal(meal = {}, index = 0) {
+  const rawName = stripMealEmoji(meal.name || meal.title || meal.meal || `Meal ${index + 1}`);
+  const emoji = meal.emoji || mealEmojiForName(rawName);
+  const timeVal = parseImportTime(meal.timeVal || meal.time || meal.timeLabel || rawName) || meal.timeVal || '';
+  const totals = calculateMealTotalsFromFoods(meal);
+  return {
+    id: slugifyDietId(meal.id || rawName, `meal_${index + 1}`),
+    name: `${emoji} ${rawName || `Meal ${index + 1}`}`,
+    emoji,
+    timeLabel: timeVal ? fmt12(timeVal) : (meal.timeLabel || ''),
+    timeVal: timeVal || '12:00',
+    kcal: totals.kcal,
+    protein: totals.protein,
+    carbs: totals.carbs,
+    fat: totals.fat,
+    foods: totals.foods
+  };
+}
+
+function isValidImportedMeal(meal = {}) {
+  const normalized = normalizeImportedMeal(meal);
+  const hasFoods = normalized.foods.length > 0;
+  const hasMacros = normalized.kcal > 0 || normalized.protein > 0 || normalized.carbs > 0 || normalized.fat > 0;
+  return hasFoods && hasMacros && (normalized.kcal > 0 || normalized.protein > 0);
+}
+
+function validateImportedDietPlan(plan) {
+  const meals = (Array.isArray(plan) ? plan : [])
+    .map(normalizeImportedMeal)
+    .filter(isValidImportedMeal)
+    .map((meal, index) => ({ ...meal, id: meal.id || `meal_${index + 1}` }));
+  return {
+    valid: meals.length > 0,
+    meals,
+    error: meals.length ? '' : IMPORT_DIET_EMPTY_MESSAGE
+  };
+}
+
+function setImportFailure(message) {
+  importedMeals = null;
+  setImportStatus('error', message);
+  setImportPreview(null);
+  setImportApplyBtn(false);
+}
+
+function acceptImportedMeals(rawMeals, options = {}) {
+  const result = validateImportedDietPlan(rawMeals);
+  if (!result.valid) {
+    setImportFailure(options.image ? IMPORT_DIET_IMAGE_EMPTY_MESSAGE : result.error);
+    if (options.dropTitle) {
+      document.getElementById('dropTitle').textContent = options.dropTitle;
+      document.getElementById('dropSub').textContent = 'Try clearer text or another image';
+    }
+    return false;
+  }
+  importedMeals = result.meals;
+  const totalKcal = importedMeals.reduce((a, m) => a + m.kcal, 0);
+  const totalPro = importedMeals.reduce((a, m) => a + m.protein, 0);
+  setImportStatus('success', `Found ${result.meals.length} meals · ${totalKcal.toLocaleString()} kcal · ${totalPro}g protein`);
+  setImportPreview(importedMeals);
+  setImportApplyBtn(true);
+  document.getElementById('dropIcon').textContent = 'OK';
+  document.getElementById('dropTitle').textContent = options.title || `${result.meals.length} meals parsed`;
+  document.getElementById('dropSub').textContent = 'Review below and tap Apply Diet';
+  return true;
+}
+
+function isLikelyMealHeading(line) {
+  const text = String(line || '').trim();
+  if (!text) return false;
+  if (extractFoodMacros(text).hasMacros) return false;
+  return /^(breakfast|lunch|dinner|snack|evening snack|morning snack|pre.?workout|post.?workout|meal\s*\d+)/i.test(text);
+}
+
+function cleanFoodNameFromLine(line) {
+  return String(line || '')
+    .replace(/[-–—|,()]+/g, ' ')
+    .replace(/\b\d+(?:\.\d+)?\s*(?:kcal|calories|cal)\b/gi, ' ')
+    .replace(/\b\d+(?:\.\d+)?\s*g?\s*(?:protein|pro|carbs?|fat|[pcf])\b/gi, ' ')
+    .replace(/\b(?:kcal|calories|cal|protein|pro|carbs?|fat)\b/gi, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function extractFoodMacros(line) {
+  const text = String(line || '').replace(/[–—]/g, '-');
+  const calMatch = text.match(/(\d+(?:\.\d+)?)\s*(?:kcal|calories|cal)\b/i);
+  const proMatch = text.match(/(\d+(?:\.\d+)?)\s*g?\s*(?:protein|pro|p)\b/i);
+  const carbsMatch = text.match(/(\d+(?:\.\d+)?)\s*g?\s*(?:carbs?|c)\b/i);
+  const fatMatch = text.match(/(\d+(?:\.\d+)?)\s*g?\s*(?:fat|f)\b/i);
+  const cal = calMatch ? importNumber(calMatch[1]) : 0;
+  const pro = proMatch ? importNumber(proMatch[1]) : 0;
+  const carbs = carbsMatch ? importNumber(carbsMatch[1]) : 0;
+  const fat = fatMatch ? importNumber(fatMatch[1]) : 0;
+  return {
+    cal,
+    pro,
+    carbs,
+    fat,
+    hasMacros: cal > 0 || pro > 0 || carbs > 0 || fat > 0
+  };
+}
+
+function parseFoodLine(line) {
+  const macros = extractFoodMacros(line);
+  if (!macros.hasMacros || (macros.cal <= 0 && macros.pro <= 0)) return null;
+  const nameWithQty = cleanFoodNameFromLine(line);
+  if (!nameWithQty) return null;
+  const qtyMatch = nameWithQty.match(/\b(?:x\s*\d+|\d+(?:\.\d+)?\s*(?:g|kg|ml|l|pcs?|pieces?|servings?|scoops?|tbsp|tsp)|\d+)\b/i);
+  const qty = qtyMatch ? qtyMatch[0].trim() : '';
+  const name = nameWithQty.replace(qty, '').replace(/\s+/g, ' ').trim() || nameWithQty;
+  return normalizeImportedFood({
+    name,
+    qty,
+    cal: macros.cal,
+    pro: macros.pro,
+    carbs: macros.carbs,
+    fat: macros.fat
+  });
+}
+
+function createParsedMealFromHeading(heading, index) {
+  const timeVal = parseImportTime(heading);
+  const name = stripMealEmoji(String(heading || '').replace(/\b\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i, '').trim()) || `Meal ${index + 1}`;
+  return {
+    id: slugifyDietId(name, `meal_${index + 1}`),
+    name,
+    emoji: mealEmojiForName(name),
+    timeVal: timeVal || '12:00',
+    timeLabel: timeVal ? fmt12(timeVal) : '',
+    foods: []
+  };
+}
+
+function parseDietTextLocally(text) {
+  const lines = String(text || '')
+    .split(/\r?\n/)
+    .map(line => line.trim().replace(/^[-*•]\s*/, ''))
+    .filter(Boolean);
+  const meals = [];
+  let current = null;
+
+  lines.forEach(line => {
+    if (isLikelyMealHeading(line)) {
+      if (current) meals.push(current);
+      current = createParsedMealFromHeading(line, meals.length);
+      return;
+    }
+
+    const food = parseFoodLine(line);
+    if (!food) return;
+    if (!current) current = createParsedMealFromHeading('Meal 1', meals.length);
+    current.foods.push(food);
+  });
+
+  if (current) meals.push(current);
+  return validateImportedDietPlan(meals).meals;
+}
+
 function openImportModal() {
   importedMeals = null;
   document.getElementById('importPasteArea').value = '';
@@ -60,13 +292,13 @@ function processImportFile(file) {
     if (name.endsWith('.json')) {
       try {
         const parsed = JSON.parse(text);
-        if (Array.isArray(parsed) && parsed[0] && parsed[0].foods) {
+        if (Array.isArray(parsed)) {
           applyParsedMeals(parsed);
           return;
         }
       } catch(err) {}
     }
-    await parseWithClaude(text);
+    parseDietTextOrAI(text);
   };
   reader.readAsText(file);
 }
@@ -127,50 +359,12 @@ IMPORTANT:
     if (!match) throw new Error('Could not find meal data in image');
 
     const meals = JSON.parse(match[0]);
-    if (!Array.isArray(meals) || !meals.length) throw new Error('No meals found');
-
-    const fixed = meals.map((m, i) => ({
-      id: m.id || ('meal' + i),
-      name: m.name || ('Meal ' + (i+1)),
-      emoji: m.emoji || '🍽️',
-      timeLabel: m.timeLabel || fmt12(m.timeVal || '12:00'),
-      timeVal: m.timeVal || '12:00',
-      kcal: Number(m.kcal) || 0,
-      protein: Number(m.protein) || 0,
-      carbs: Number(m.carbs) || 0,
-      fat: Number(m.fat) || 0,
-      foods: (() => {
-        const foods = (m.foods || []).map(f => ({
-          name: f.name || '',
-          qty: f.qty || '',
-          cal: Number(f.cal) || 0,
-          pro: Number(f.pro) || 0
-        }));
-        // If all foods have 0 cal, distribute meal total evenly
-        const totalFoodCal = foods.reduce((a,f) => a+f.cal, 0);
-        const totalFoodPro = foods.reduce((a,f) => a+f.pro, 0);
-        if (totalFoodCal === 0 && foods.length > 0) {
-          const perCal = Math.round((Number(m.kcal)||0) / foods.length);
-          const perPro = Math.round((Number(m.protein)||0) / foods.length);
-          return foods.map(f => ({ ...f, cal: perCal, pro: perPro }));
-        }
-        return foods;
-      })()
-    }));
-
-    importedMeals = fixed;
-    const totalKcal = fixed.reduce((a,m) => a + m.kcal, 0);
-    const totalPro  = fixed.reduce((a,m) => a + m.protein, 0);
-    setImportStatus('success', `✅ Found ${fixed.length} meals · ${totalKcal.toLocaleString()} kcal · ${totalPro}g protein`);
-    setImportPreview(fixed);
-    setImportApplyBtn(true);
-    document.getElementById('dropIcon').textContent = '✅';
-    document.getElementById('dropTitle').textContent = `${fixed.length} meals parsed from image`;
-    document.getElementById('dropSub').textContent = 'Review below and tap Apply Diet';
+    acceptImportedMeals(meals, { image: true, title: 'Meals parsed from image', dropTitle: 'Image import failed' });
 
   } catch(err) {
-    setImportStatus('error', '❌ Could not read image: ' + err.message);
-    setImportApplyBtn(false);
+    setImportFailure(err.message && /json|api|read/i.test(err.message)
+      ? 'Could not read image: ' + err.message
+      : IMPORT_DIET_IMAGE_EMPTY_MESSAGE);
   }
 }
 
@@ -184,7 +378,7 @@ function onPasteInput(el) {
     setImportApplyBtn(false);
     return;
   }
-  pasteDebounce = setTimeout(() => parseWithClaude(val), 800);
+  pasteDebounce = setTimeout(() => parseDietTextOrAI(val), 500);
 }
 
 function setImportStatus(type, msg) {
@@ -200,7 +394,7 @@ function setImportPreview(meals) {
   el.innerHTML = meals.map(m => `
     <div class="preview-meal">
       <div>
-        <div class="preview-meal-name">${m.emoji || ''} ${m.name.replace(/^[^\w\s]*\s*/,'')}</div>
+        <div class="preview-meal-name">${m.emoji || ''} ${stripMealEmoji(m.name)}</div>
         <div class="preview-meal-macros">${m.timeLabel || fmt12(m.timeVal)} · ${m.foods ? m.foods.length : 0} items</div>
       </div>
       <div style="text-align:right;">
@@ -215,6 +409,15 @@ function setImportApplyBtn(enabled) {
   btn.disabled = !enabled;
   btn.style.opacity = enabled ? '1' : '0.4';
   btn.style.cursor = enabled ? 'pointer' : 'not-allowed';
+}
+
+function parseDietTextOrAI(rawText) {
+  const localMeals = parseDietTextLocally(rawText);
+  if (localMeals.length) {
+    acceptImportedMeals(localMeals, { title: `${localMeals.length} meals parsed` });
+    return;
+  }
+  parseWithClaude(rawText);
 }
 
 async function parseWithClaude(rawText) {
@@ -273,63 +476,30 @@ ${rawText.slice(0, 4000)}`;
     if (!match) throw new Error('Could not find JSON in response');
 
     const meals = JSON.parse(match[0]);
-    if (!Array.isArray(meals) || !meals.length) throw new Error('Empty meal list returned');
-
-    // Validate and fix each meal
-    const fixed = meals.map((m, i) => ({
-      id: m.id || ('meal' + i),
-      name: m.name || ('Meal ' + (i+1)),
-      emoji: m.emoji || '🍽️',
-      timeLabel: m.timeLabel || fmt12(m.timeVal || '12:00'),
-      timeVal: m.timeVal || '12:00',
-      kcal: Number(m.kcal) || m.foods?.reduce((a,f)=>a+(f.cal||0),0) || 0,
-      protein: Number(m.protein) || m.foods?.reduce((a,f)=>a+(f.pro||0),0) || 0,
-      carbs: Number(m.carbs) || 0,
-      fat: Number(m.fat) || 0,
-      foods: (m.foods || []).map(f => ({
-        name: f.name || '',
-        qty: f.qty || '',
-        cal: Number(f.cal) || 0,
-        pro: Number(f.pro) || 0
-      }))
-    }));
-
-    importedMeals = fixed;
-    const totalKcal = fixed.reduce((a,m) => a + m.kcal, 0);
-    const totalPro  = fixed.reduce((a,m) => a + m.protein, 0);
-    setImportStatus('success', `✅ Found ${fixed.length} meals · ${totalKcal.toLocaleString()} kcal · ${totalPro}g protein`);
-    setImportPreview(fixed);
-    setImportApplyBtn(true);
-
-    document.getElementById('dropIcon').textContent = '✅';
-    document.getElementById('dropTitle').textContent = `${fixed.length} meals parsed`;
-    document.getElementById('dropSub').textContent = 'Review below and tap Apply Diet';
+    acceptImportedMeals(meals, { title: 'Meals parsed' });
 
   } catch(err) {
-    setImportStatus('error', '❌ Could not parse: ' + err.message + '. Try a cleaner format or JSON file.');
-    setImportApplyBtn(false);
+    setImportFailure(err.message && /json|api/i.test(err.message)
+      ? 'Could not parse: ' + err.message + '. Try a cleaner format or JSON file.'
+      : IMPORT_DIET_EMPTY_MESSAGE);
   }
 }
 
 function applyParsedMeals(meals) {
-  importedMeals = meals;
-  const totalKcal = meals.reduce((a,m) => a + m.kcal, 0);
-  const totalPro  = meals.reduce((a,m) => a + m.protein, 0);
-  setImportStatus('success', `✅ Found ${meals.length} meals · ${totalKcal.toLocaleString()} kcal · ${totalPro}g protein`);
-  setImportPreview(meals);
-  setImportApplyBtn(true);
-  document.getElementById('dropIcon').textContent = '✅';
-  document.getElementById('dropTitle').textContent = `${meals.length} meals ready`;
-  document.getElementById('dropSub').textContent = 'Review below and tap Apply Diet';
+  acceptImportedMeals(meals, { title: 'Meals ready' });
 }
 
 function applyImport() {
-  if (!importedMeals || !importedMeals.length) return;
-  if (!confirm(`Replace your current ${state.meals.length} meals with ${importedMeals.length} new meals? Your check history stays.`)) return;
+  const result = validateImportedDietPlan(importedMeals);
+  if (!result.valid) {
+    setImportFailure(result.error);
+    return;
+  }
+  if (!confirm(`Replace your current ${state.meals.length} meals with ${result.meals.length} new meals? Your check history stays.`)) return;
 
-  state.meals = importedMeals;
+  state.meals = result.meals;
   saveState();
   closeImportModal();
   renderAll();
-  showToast(`✅ Diet updated! ${importedMeals.length} meals loaded.`);
+  showToast(`✅ Diet updated! ${result.meals.length} meals loaded.`);
 }
