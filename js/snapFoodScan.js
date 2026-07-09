@@ -6,6 +6,7 @@ let snapIdentified = null;
 let pendingSnapResult = null;
 let snapDescDebounce = null;
 let snapImageData = null;
+let snapPhotoScanFailed = false;
 
 function triggerSnapInput(type) {
   const id = type === 'camera' ? 'snapFileInputCamera' : 'snapFileInputGallery';
@@ -18,6 +19,7 @@ function openSnapModal(mealId, mealName) {
   snapIdentified = null;
   pendingSnapResult = null;
   snapImageData = null;
+  snapPhotoScanFailed = false;
   clearTimeout(snapDescDebounce);
 
   document.getElementById('snapFileInputCamera').value = '';
@@ -49,6 +51,7 @@ function closeSnapModal() {
   snapIdentified = null;
   pendingSnapResult = null;
   snapImageData = null;
+  snapPhotoScanFailed = false;
   clearTimeout(snapDescDebounce);
 }
 
@@ -70,6 +73,7 @@ async function handleSnapFile(input) {
   document.getElementById('snapActions').style.display = 'none';
   snapIdentified = null;
   pendingSnapResult = null;
+  snapPhotoScanFailed = false;
   setSnapStatus('loading', 'Analyzing food...');
 
   try {
@@ -127,18 +131,75 @@ function onSnapDescInput(el) {
   clearTimeout(snapDescDebounce);
   const val = el.value.trim();
   if (!val && !snapImageData) return;
-  document.getElementById('snapResult').style.display = 'none';
-  document.getElementById('snapResult').innerHTML = '';
-  document.getElementById('snapActions').style.display = 'none';
-  snapIdentified = null;
-  pendingSnapResult = null;
-  snapDescDebounce = setTimeout(() => estimateSnapMeal(), snapImageData ? 1100 : 750);
+  if (!snapPhotoScanFailed) {
+    document.getElementById('snapResult').style.display = 'none';
+    document.getElementById('snapResult').innerHTML = '';
+    document.getElementById('snapActions').style.display = 'none';
+    snapIdentified = null;
+    pendingSnapResult = null;
+  }
+  snapDescDebounce = setTimeout(() => {
+    if (snapPhotoScanFailed && val) estimateSnapFromDescription();
+    else estimateSnapMeal();
+  }, snapImageData ? 750 : 750);
 }
 
 function setSnapStatus(type, msg) {
   const el = document.getElementById('snapStatus');
   el.className = 'import-status' + (type ? ' visible ' + type : '');
   el.textContent = msg;
+}
+
+function showSnapPhotoFallbackPanel() {
+  snapPhotoScanFailed = true;
+  snapIdentified = null;
+  pendingSnapResult = null;
+  const container = document.getElementById('snapResult');
+  container.innerHTML = `
+    <div class="snap-fallback-panel">
+      <strong>Photo AI could not read this clearly.</strong>
+      <span>Type what it is below, or retry scan.</span>
+      <div class="snap-fallback-actions">
+        <button type="button" onclick="retrySnapPhotoScan()">Retry Photo Scan</button>
+        <button type="button" class="primary" onclick="estimateSnapFromDescription()">Estimate from Description</button>
+      </div>
+    </div>`;
+  container.style.display = 'block';
+  document.getElementById('snapActions').style.display = 'none';
+  setSnapStatus('error', 'Photo AI could not read this clearly. Type what it is below, or retry scan.');
+}
+
+function estimateSnapFromDescription() {
+  const desc = document.getElementById('snapDescArea').value.trim();
+  if (!desc) {
+    setSnapStatus('error', 'Type what you ate first.');
+    return null;
+  }
+  const fallback = estimateSnapMealLocally(desc);
+  if (isSnapInvalidEstimate(fallback)) {
+    showSnapPhotoFallbackPanel();
+    setSnapStatus('error', "I still need a clearer description, like 'burger + fries'.");
+    return null;
+  }
+  snapPhotoScanFailed = false;
+  fallback.needsReview = true;
+  renderSnapResult(fallback);
+  setSnapStatus('success', 'Estimated from description. Review before saving.');
+  return fallback;
+}
+
+function retrySnapPhotoScan() {
+  if (!snapImageData) {
+    setSnapStatus('error', 'Upload a photo first.');
+    return null;
+  }
+  snapPhotoScanFailed = false;
+  snapIdentified = null;
+  pendingSnapResult = null;
+  document.getElementById('snapResult').style.display = 'none';
+  document.getElementById('snapResult').innerHTML = '';
+  document.getElementById('snapActions').style.display = 'none';
+  return estimateSnapMeal();
 }
 
 async function estimateSnapMeal() {
@@ -151,6 +212,7 @@ async function estimateSnapMeal() {
   setSnapStatus('loading', snapImageData ? 'Analyzing food photo...' : 'Estimating macros...');
 
   try {
+    snapPhotoScanFailed = false;
     const result = await estimateSnapMealWithWorker(desc, snapImageData);
     renderSnapResult(result);
     setSnapStatus('success', 'Review the estimate before saving.');
@@ -168,9 +230,7 @@ async function estimateSnapMeal() {
         }
       }
 
-      document.getElementById('snapResult').style.display = 'none';
-      document.getElementById('snapActions').style.display = 'none';
-      setSnapStatus('error', "Photo scan failed. Add a short description like 'burger + fries' and try again.");
+      showSnapPhotoFallbackPanel();
       return null;
     }
 
@@ -453,8 +513,11 @@ function estimateSnapMealLocally(desc) {
     }, desc);
   }
 
+  const mealName = items.length === 1
+    ? items[0].name
+    : items.map(item => item.name).join(' + ');
   return normalizeSnapMeal({
-    name: items.length === 1 ? items[0].name : 'Estimated meal',
+    name: mealName,
     emoji: items[0].emoji || '\uD83C\uDF7D\uFE0F',
     kcal: items.reduce((a, i) => a + i.cal, 0),
     protein: items.reduce((a, i) => a + i.pro, 0),
