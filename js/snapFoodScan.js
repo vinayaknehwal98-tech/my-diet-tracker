@@ -8,6 +8,26 @@ let snapDescDebounce = null;
 let snapImageData = null;
 let snapPhotoScanFailed = false;
 
+const SNAP_FOOD_MACRO_ESTIMATES = [
+  { keys: ['burger', 'cheeseburger', 'hamburger'], name: 'Burger', emoji: '\uD83C\uDF54', qty: '1 burger', cal: 450, pro: 22, carbs: 40, fat: 22 },
+  { keys: ['fries', 'french fries', 'chips'], name: 'Fries', emoji: '\uD83C\uDF5F', qty: '1 serving', cal: 350, pro: 5, carbs: 45, fat: 18 },
+  { keys: ['pizza slice', 'slice of pizza', 'pizza'], name: 'Pizza slice', emoji: '\uD83C\uDF55', qty: '1 slice', cal: 280, pro: 12, carbs: 36, fat: 10 },
+  { keys: ['sandwich'], name: 'Sandwich', emoji: '\uD83E\uDD6A', qty: '1 sandwich', cal: 350, pro: 15, carbs: 45, fat: 12 },
+  { keys: ['rice', 'chawal'], name: 'Rice', emoji: '\uD83C\uDF5A', qty: '1 cup cooked', cal: 205, pro: 4, carbs: 45, fat: 0 },
+  { keys: ['roti', 'chapati', 'phulka'], name: 'Roti', emoji: '\uD83E\uDED3', qty: '1 medium', cal: 120, pro: 4, carbs: 22, fat: 3 },
+  { keys: ['paneer'], name: 'Paneer', emoji: '\uD83E\uDD58', qty: '100 g', cal: 265, pro: 18, carbs: 6, fat: 20 },
+  { keys: ['egg', 'anda'], name: 'Egg', emoji: '\uD83E\uDD5A', qty: '1 large', cal: 78, pro: 6, carbs: 1, fat: 5 },
+  { keys: ['milk', 'doodh'], name: 'Milk', emoji: '\uD83E\uDD5B', qty: '250 ml', cal: 150, pro: 8, carbs: 12, fat: 8 },
+  { keys: ['banana'], name: 'Banana', emoji: '\uD83C\uDF4C', qty: '1 medium', cal: 105, pro: 1, carbs: 27, fat: 0 },
+  { keys: ['oats', 'oatmeal'], name: 'Oats', emoji: '\uD83E\uDD63', qty: '40 g', cal: 150, pro: 5, carbs: 27, fat: 3 },
+  { keys: ['peanut butter', 'pb'], name: 'Peanut butter', emoji: '\uD83E\uDD5C', qty: '1 tbsp', cal: 95, pro: 4, carbs: 3, fat: 8 },
+  { keys: ['whey', 'protein powder'], name: 'Whey protein', emoji: '\uD83E\uDD64', qty: '1 scoop', cal: 120, pro: 24, carbs: 3, fat: 2 },
+  { keys: ['dal', 'daal'], name: 'Dal', emoji: '\uD83E\uDD63', qty: '1 cup', cal: 180, pro: 12, carbs: 28, fat: 4 },
+  { keys: ['curd', 'yogurt', 'dahi'], name: 'Curd', emoji: '\uD83E\uDD63', qty: '1 cup', cal: 100, pro: 6, carbs: 8, fat: 5 },
+  { keys: ['almond', 'badam'], name: 'Almonds', emoji: '\uD83C\uDF30', qty: '10 pieces', cal: 70, pro: 3, carbs: 3, fat: 6 },
+  { keys: ['walnut', 'akhrot'], name: 'Walnuts', emoji: '\uD83C\uDF30', qty: '4 halves', cal: 90, pro: 2, carbs: 2, fat: 9 }
+];
+
 function triggerSnapInput(type) {
   const id = type === 'camera' ? 'snapFileInputCamera' : 'snapFileInputGallery';
   const input = document.getElementById(id);
@@ -256,6 +276,8 @@ async function estimateSnapMealWithWorker(desc, imageData) {
 Identify the food(s) visible in this real food image${desc ? ` using this user note as extra context: "${desc}"` : ''}.
 Estimate approximate calories, protein, carbs, and fat using realistic restaurant / household portions.
 Do not return zeros unless there is clearly no food visible.
+Every food item must include cal, pro, carbs, and fat. Never omit carbs or fat.
+If exact carbs/fat are unknown, estimate realistic values. Do not return 0 carbs/fat for normal mixed foods unless truly zero.
 ${retry ? 'This is a real food image. You must estimate approximate calories and macros. Do not return zeros unless the image has no food.' : ''}
 
 If the image looks like burger + fries, estimate approximately:
@@ -271,8 +293,8 @@ Return ONLY valid JSON in this exact shape:
   "carbs": 85,
   "fat": 40,
   "items": [
-    { "name": "Burger", "qty": "1 burger", "cal": 450, "pro": 22 },
-    { "name": "Fries", "qty": "1 serving", "cal": 350, "pro": 5 }
+    { "name": "Burger", "qty": "1 burger", "cal": 450, "pro": 22, "carbs": 40, "fat": 22 },
+    { "name": "Fries", "qty": "1 serving", "cal": 350, "pro": 5, "carbs": 45, "fat": 18 }
   ],
   "confidence": "medium",
   "needsReview": true
@@ -280,6 +302,8 @@ Return ONLY valid JSON in this exact shape:
 Use the numbers above only as format examples unless the food is actually burger + fries.`
       : `You are AI Food Scan v2 for a diet tracker.
 Estimate the meal from the text${desc ? `: "${desc}"` : ''}.
+Every food item must include cal, pro, carbs, and fat. Never omit carbs or fat.
+If exact carbs/fat are unknown, estimate realistic values. Do not return 0 carbs/fat for normal mixed foods unless truly zero.
 Return ONLY valid JSON in this exact shape:
 {
   "name": "Paneer rice bowl",
@@ -289,8 +313,8 @@ Return ONLY valid JSON in this exact shape:
   "carbs": 75,
   "fat": 28,
   "items": [
-    { "name": "Paneer curry", "qty": "1 cup", "cal": 320, "pro": 18 },
-    { "name": "Rice", "qty": "1.5 cups cooked", "cal": 330, "pro": 7 }
+    { "name": "Paneer curry", "qty": "1 cup", "cal": 320, "pro": 18, "carbs": 12, "fat": 24 },
+    { "name": "Rice", "qty": "1.5 cups cooked", "cal": 330, "pro": 7, "carbs": 63, "fat": 4 }
   ],
   "confidence": "low|medium|high",
   "needsReview": true
@@ -376,7 +400,7 @@ function normalizeSnapFoodItem(item = {}) {
   const manualOverrides = source.manualOverrides && typeof source.manualOverrides === 'object'
     ? { ...source.manualOverrides }
     : {};
-  return {
+  const normalized = {
     name: String(source.name || source.food || source.title || 'Scanned food').trim() || 'Scanned food',
     qty: String(source.qty || source.quantity || source.amount || '1 serving').trim() || '1 serving',
     qtyMultiplier: snapPositiveNumber(source.qtyMultiplier, 1),
@@ -392,6 +416,43 @@ function normalizeSnapFoodItem(item = {}) {
     source: source.source === 'manual_edit' ? 'manual_edit' : 'ai_scan',
     manualOverrides
   };
+  const estimated = estimateMissingSnapMacros(normalized);
+  return {
+    ...estimated,
+    baseCal: estimated.baseCal || estimated.cal,
+    basePro: estimated.basePro || estimated.pro,
+    baseCarbs: estimated.baseCarbs || estimated.carbs,
+    baseFat: estimated.baseFat || estimated.fat
+  };
+}
+
+function estimateMissingSnapMacros(item = {}) {
+  const result = { ...item };
+  const preset = findSnapMacroPreset(result.name);
+  if (!preset) return result;
+
+  const manualOverrides = result.manualOverrides && typeof result.manualOverrides === 'object'
+    ? result.manualOverrides
+    : {};
+  const isManual = result.source === 'manual_edit';
+  const scale = snapNumber(result.cal, 0) > 0 && preset.cal > 0
+    ? snapNumber(result.cal, 0) / preset.cal
+    : snapPositiveNumber(result.qtyMultiplier, 1);
+
+  if (snapNumber(result.cal, 0) <= 0) result.cal = Math.round(preset.cal * scale);
+  if (snapNumber(result.pro, 0) <= 0) result.pro = Math.round(preset.pro * scale);
+  if (!isManual && !manualOverrides.carbs && snapNumber(result.carbs, 0) <= 0) {
+    result.carbs = Math.round(preset.carbs * scale);
+  }
+  if (!isManual && !manualOverrides.fat && snapNumber(result.fat, 0) <= 0) {
+    result.fat = Math.round(preset.fat * scale);
+  }
+  return result;
+}
+
+function findSnapMacroPreset(name) {
+  const text = String(name || '').toLowerCase();
+  return SNAP_FOOD_MACRO_ESTIMATES.find(food => food.keys.some(key => text.includes(key))) || null;
 }
 
 function calculateSnapTotals(items = []) {
@@ -424,6 +485,7 @@ function normalizeSnapMeal(input, desc) {
     ? String(source.confidence).toLowerCase()
     : 'medium';
 
+  distributeSnapMealMacrosToItems(items, source);
   const totals = calculateSnapTotals(items);
   const hasItemTotals = items.length && (totals.kcal > 0 || totals.protein > 0 || totals.carbs > 0 || totals.fat > 0);
   return {
@@ -437,6 +499,39 @@ function normalizeSnapMeal(input, desc) {
     confidence,
     needsReview: source.needsReview !== false
   };
+}
+
+function distributeSnapMealMacrosToItems(items, source) {
+  if (!Array.isArray(items) || !items.length) return;
+  distributeSnapMealMacroToItems(items, 'carbs', snapNumber(source.carbs ?? source.carbohydrates, 0));
+  distributeSnapMealMacroToItems(items, 'fat', snapNumber(source.fat ?? source.fats, 0));
+}
+
+function distributeSnapMealMacroToItems(items, field, mealValue) {
+  if (mealValue <= 0) return;
+  const existing = items.reduce((sum, item) => sum + snapNumber(item[field], 0), 0);
+  if (existing >= mealValue) return;
+
+  const candidates = items.filter(item => {
+    const manualOverrides = item.manualOverrides && typeof item.manualOverrides === 'object'
+      ? item.manualOverrides
+      : {};
+    if (item.source === 'manual_edit' || manualOverrides[field]) return false;
+    return snapNumber(item[field], 0) <= 0 && snapNumber(item.cal, 0) > 0;
+  });
+  if (!candidates.length) return;
+
+  const remaining = mealValue - existing;
+  const totalCalories = candidates.reduce((sum, item) => sum + snapNumber(item.cal, 0), 0);
+  let assigned = 0;
+  candidates.forEach((item, index) => {
+    const value = index === candidates.length - 1
+      ? Math.max(0, remaining - assigned)
+      : Math.round(remaining * (snapNumber(item.cal, 0) / totalCalories));
+    item[field] = value;
+    item[`base${field.charAt(0).toUpperCase()}${field.slice(1)}`] = value;
+    assigned += value;
+  });
 }
 
 function validateSnapMealEstimate(result, imageData, desc) {
@@ -468,20 +563,7 @@ function snapPositiveNumber(value, fallback) {
 function estimateSnapMealLocally(desc) {
   const text = String(desc || '').toLowerCase();
   const foods = [
-    { keys: ['banana'], name: 'Banana', emoji: '\uD83C\uDF4C', qty: '1 medium', cal: 105, pro: 1, carbs: 27, fat: 0 },
-    { keys: ['egg', 'anda'], name: 'Egg', emoji: '\uD83E\uDD5A', qty: '1 large', cal: 78, pro: 6, carbs: 1, fat: 5 },
-    { keys: ['roti', 'chapati', 'phulka'], name: 'Roti', emoji: '\uD83E\uDED3', qty: '1 medium', cal: 120, pro: 4, carbs: 22, fat: 3 },
-    { keys: ['rice', 'chawal'], name: 'Rice', emoji: '\uD83C\uDF5A', qty: '1 cup cooked', cal: 205, pro: 4, carbs: 45, fat: 0 },
-    { keys: ['dal', 'daal'], name: 'Dal', emoji: '\uD83E\uDD63', qty: '1 cup', cal: 180, pro: 12, carbs: 28, fat: 4 },
-    { keys: ['oats', 'oatmeal'], name: 'Oats', emoji: '\uD83E\uDD63', qty: '40 g', cal: 150, pro: 5, carbs: 27, fat: 3 },
-    { keys: ['peanut butter', 'pb'], name: 'Peanut butter', emoji: '\uD83E\uDD5C', qty: '1 tbsp', cal: 95, pro: 4, carbs: 3, fat: 8 },
-    { keys: ['whey', 'protein powder'], name: 'Whey protein', emoji: '\uD83E\uDD64', qty: '1 scoop', cal: 120, pro: 24, carbs: 3, fat: 2 },
-    { keys: ['milk', 'doodh'], name: 'Milk', emoji: '\uD83E\uDD5B', qty: '250 ml', cal: 150, pro: 8, carbs: 12, fat: 8 },
-    { keys: ['curd', 'yogurt', 'dahi'], name: 'Curd', emoji: '\uD83E\uDD63', qty: '1 cup', cal: 100, pro: 6, carbs: 8, fat: 5 },
-    { keys: ['almond', 'badam'], name: 'Almonds', emoji: '\uD83C\uDF30', qty: '10 pieces', cal: 70, pro: 3, carbs: 3, fat: 6 },
-    { keys: ['walnut', 'akhrot'], name: 'Walnuts', emoji: '\uD83C\uDF30', qty: '4 halves', cal: 90, pro: 2, carbs: 2, fat: 9 },
-    { keys: ['burger', 'cheeseburger', 'hamburger'], name: 'Burger', emoji: '\uD83C\uDF54', qty: '1 burger', cal: 450, pro: 22, carbs: 40, fat: 22 },
-    { keys: ['fries', 'french fries', 'chips'], name: 'Fries', emoji: '\uD83C\uDF5F', qty: '1 serving', cal: 350, pro: 5, carbs: 45, fat: 18 }
+    ...SNAP_FOOD_MACRO_ESTIMATES
   ];
 
   const items = [];
