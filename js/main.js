@@ -260,11 +260,78 @@ function exposeGlobals() {
   }
 }
 
+function removeStaleHeaderImportButtons() {
+  const header = document.querySelector('.header-top');
+  if (!header) return 0;
+  let removed = 0;
+  header.querySelectorAll('button').forEach((button) => {
+    const text = (button.textContent || '').trim().toLowerCase();
+    const inlineClick = button.getAttribute('onclick') || '';
+    const assignedClick = button.onclick ? String(button.onclick) : '';
+    if (text.includes('import diet') || inlineClick.includes('openImportModal') || assignedClick.includes('openImportModal')) {
+      button.remove();
+      removed += 1;
+    }
+  });
+  return removed;
+}
+
+function removeStaleFloatingLogExtraButtons() {
+  let removed = 0;
+  document.querySelectorAll('.fab-extra').forEach((button) => {
+    if ((button.textContent || '').toLowerCase().includes('log extra')) {
+      button.remove();
+      removed += 1;
+    }
+  });
+  return removed;
+}
+
+function removeStaleImportShellElements() {
+  return {
+    headerImportButtonsRemoved: removeStaleHeaderImportButtons(),
+    floatingLogExtraButtonsRemoved: removeStaleFloatingLogExtraButtons()
+  };
+}
+
+function installShellRefreshGuards() {
+  if (typeof renderAll === 'function' && !renderAll.__shellRefreshGuarded) {
+    const originalRenderAll = renderAll;
+    renderAll = function(...args) {
+      removeStaleImportShellElements();
+      const result = originalRenderAll.apply(this, args);
+      removeStaleImportShellElements();
+      return result;
+    };
+    renderAll.__shellRefreshGuarded = true;
+  }
+
+  if (typeof switchTab === 'function' && !switchTab.__shellRefreshGuarded) {
+    const originalSwitchTab = switchTab;
+    switchTab = function(...args) {
+      const result = originalSwitchTab.apply(this, args);
+      removeStaleImportShellElements();
+      return result;
+    };
+    switchTab.__shellRefreshGuarded = true;
+  }
+}
+
 
 // --- INIT ---
-console.log("Diet Tracker version: move-import-buttons-1");
+console.log("Diet Tracker version: move-import-buttons-cache-fix-1");
+installShellRefreshGuards();
 exposeGlobals();
+const initialShellCleanup = removeStaleImportShellElements();
+console.log("App shell loaded:", {
+  version: "move-import-buttons-cache-fix-1",
+  headerImportButtonsRemoved: initialShellCleanup.headerImportButtonsRemoved
+});
 renderAll();
+const postRenderShellCleanup = removeStaleImportShellElements();
+if (postRenderShellCleanup.headerImportButtonsRemoved !== initialShellCleanup.headerImportButtonsRemoved) {
+  console.log("App shell cleanup after render:", postRenderShellCleanup);
+}
 setTimeout(() => {
   if (typeof showStartupCoachBrief === "function") {
     showStartupCoachBrief();

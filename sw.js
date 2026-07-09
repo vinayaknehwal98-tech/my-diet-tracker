@@ -14,11 +14,9 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
-const CACHE_NAME = "bulk-diet-v7";
+const CACHE_NAME = "move-import-buttons-cache-fix-1";
 
 const STATIC = [
-  "./",
-  "./index.html",
   "./manifest.json",
   "./icon-192.png",
   "./icon-512.png"
@@ -49,6 +47,19 @@ self.addEventListener("fetch", (event) => {
 
   if (event.request.method !== "GET") return;
   if (url.protocol !== "http:" && url.protocol !== "https:") return;
+
+  const isAppShellRequest =
+    event.request.mode === "navigate" ||
+    url.pathname.endsWith("/") ||
+    url.pathname.endsWith("/index.html");
+
+  if (isAppShellRequest) {
+    event.respondWith(
+      fetch(event.request, { cache: "no-store" })
+        .catch(() => caches.match("./index.html"))
+    );
+    return;
+  }
 
   event.respondWith(
     fetch(event.request)
