@@ -173,6 +173,7 @@ const remainingWeight = Math.max(
             <span style="font-size:12px;color:var(--muted);">${ex.protein}g protein</span>
             <span style="font-size:12px;color:var(--muted);">${ex.carbs||0}g carbs</span>
             <span style="font-size:12px;color:var(--muted);">${ex.fat||0}g fat</span>
+            ${(ex.foods || ex.items || []).slice(0, 3).map(item => `<span style="font-size:12px;color:var(--muted);">${item.name}${item.qty ? ' · ' + item.qty : ''}</span>`).join('')}
           </div>
         </div>`;
     });

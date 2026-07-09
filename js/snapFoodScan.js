@@ -3,6 +3,7 @@
 const AI_FOOD_SCAN_WORKER_URL = 'https://blue-poetry-b2ac.vinayaknehwal98.workers.dev';
 let snapContext = { mealId: null, mealName: null };
 let snapIdentified = null;
+let pendingSnapResult = null;
 let snapDescDebounce = null;
 let snapImageData = null;
 
@@ -15,6 +16,7 @@ function triggerSnapInput(type) {
 function openSnapModal(mealId, mealName) {
   snapContext = { mealId: mealId || null, mealName: mealName || null };
   snapIdentified = null;
+  pendingSnapResult = null;
   snapImageData = null;
   clearTimeout(snapDescDebounce);
 
@@ -26,6 +28,7 @@ function openSnapModal(mealId, mealName) {
   document.getElementById('snapPreviewImg').style.display = 'none';
   document.getElementById('snapDropZone').style.display = 'block';
   document.getElementById('snapResult').style.display = 'none';
+  document.getElementById('snapResult').innerHTML = '';
   document.getElementById('snapActions').style.display = 'none';
   document.getElementById('snapDropIcon').textContent = '\uD83D\uDCF7';
   document.getElementById('snapDropTitle').textContent = 'How do you want to add the photo?';
@@ -44,6 +47,7 @@ function openSnapModal(mealId, mealName) {
 function closeSnapModal() {
   document.getElementById('snapModal').classList.remove('open');
   snapIdentified = null;
+  pendingSnapResult = null;
   snapImageData = null;
   clearTimeout(snapDescDebounce);
 }
@@ -62,7 +66,10 @@ async function handleSnapFile(input) {
   document.getElementById('snapDropZone').style.display = 'none';
   document.getElementById('snapDescArea').placeholder = 'Add any extra details (optional)...';
   document.getElementById('snapResult').style.display = 'none';
+  document.getElementById('snapResult').innerHTML = '';
   document.getElementById('snapActions').style.display = 'none';
+  snapIdentified = null;
+  pendingSnapResult = null;
   setSnapStatus('loading', 'Analyzing food...');
 
   try {
@@ -121,7 +128,10 @@ function onSnapDescInput(el) {
   const val = el.value.trim();
   if (!val && !snapImageData) return;
   document.getElementById('snapResult').style.display = 'none';
+  document.getElementById('snapResult').innerHTML = '';
   document.getElementById('snapActions').style.display = 'none';
+  snapIdentified = null;
+  pendingSnapResult = null;
   snapDescDebounce = setTimeout(() => estimateSnapMeal(), snapImageData ? 1100 : 750);
 }
 
@@ -297,36 +307,72 @@ function parseSnapJson(raw) {
   return JSON.parse(match[0]);
 }
 
+function normalizeSnapFoodItem(item = {}) {
+  const source = item && typeof item === 'object' ? item : {};
+  const baseCal = snapNumber(source.baseCal ?? source.cal ?? source.kcal ?? source.calories, 0);
+  const basePro = snapNumber(source.basePro ?? source.pro ?? source.protein, 0);
+  const baseCarbs = snapNumber(source.baseCarbs ?? source.carbs ?? source.carbohydrates, 0);
+  const baseFat = snapNumber(source.baseFat ?? source.fat ?? source.fats, 0);
+  const manualOverrides = source.manualOverrides && typeof source.manualOverrides === 'object'
+    ? { ...source.manualOverrides }
+    : {};
+  return {
+    name: String(source.name || source.food || source.title || 'Scanned food').trim() || 'Scanned food',
+    qty: String(source.qty || source.quantity || source.amount || '1 serving').trim() || '1 serving',
+    qtyMultiplier: snapPositiveNumber(source.qtyMultiplier, 1),
+    baseCal,
+    basePro,
+    baseCarbs,
+    baseFat,
+    cal: snapNumber(source.cal ?? source.kcal ?? source.calories, baseCal),
+    pro: snapNumber(source.pro ?? source.protein, basePro),
+    carbs: snapNumber(source.carbs ?? source.carbohydrates, baseCarbs),
+    fat: snapNumber(source.fat ?? source.fats, baseFat),
+    edited: !!source.edited,
+    source: source.source === 'manual_edit' ? 'manual_edit' : 'ai_scan',
+    manualOverrides
+  };
+}
+
+function calculateSnapTotals(items = []) {
+  const normalized = (Array.isArray(items) ? items : []).map(normalizeSnapFoodItem);
+  return {
+    kcal: normalized.reduce((sum, item) => sum + snapNumber(item.cal, 0), 0),
+    protein: normalized.reduce((sum, item) => sum + snapNumber(item.pro, 0), 0),
+    carbs: normalized.reduce((sum, item) => sum + snapNumber(item.carbs, 0), 0),
+    fat: normalized.reduce((sum, item) => sum + snapNumber(item.fat, 0), 0)
+  };
+}
+
 function normalizeSnapMeal(input, desc) {
   const source = input && typeof input === 'object' ? input : {};
   const itemSource = Array.isArray(source.items) ? source.items : [];
-  const items = itemSource.map(item => ({
-    name: String(item.name || item.food || 'Food').trim() || 'Food',
-    qty: String(item.qty || item.quantity || item.amount || '1 serving').trim() || '1 serving',
-    cal: snapNumber(item.cal ?? item.kcal ?? item.calories, 0),
-    pro: snapNumber(item.pro ?? item.protein, 0)
-  }));
+  const items = itemSource.map(normalizeSnapFoodItem);
 
   if (!items.length && (source.description || desc)) {
-    items.push({
+    items.push(normalizeSnapFoodItem({
       name: String(source.description || desc).slice(0, 80),
       qty: 'estimated serving',
       cal: snapNumber(source.kcal ?? source.calories, 0),
-      pro: snapNumber(source.protein ?? source.pro ?? source.proteins, 0)
-    });
+      pro: snapNumber(source.protein ?? source.pro ?? source.proteins, 0),
+      carbs: snapNumber(source.carbs ?? source.carbohydrates, 0),
+      fat: snapNumber(source.fat ?? source.fats, 0)
+    }));
   }
 
   const confidence = ['low', 'medium', 'high'].includes(String(source.confidence).toLowerCase())
     ? String(source.confidence).toLowerCase()
     : 'medium';
 
+  const totals = calculateSnapTotals(items);
+  const hasItemTotals = items.length && (totals.kcal > 0 || totals.protein > 0 || totals.carbs > 0 || totals.fat > 0);
   return {
     name: String(source.name || source.title || 'Estimated meal').trim() || 'Estimated meal',
     emoji: String(source.emoji || '\uD83C\uDF7D\uFE0F').trim() || '\uD83C\uDF7D\uFE0F',
-    kcal: snapNumber(source.kcal ?? source.calories, items.reduce((a, i) => a + i.cal, 0)),
-    protein: snapNumber(source.protein ?? source.pro ?? source.proteins, items.reduce((a, i) => a + i.pro, 0)),
-    carbs: snapNumber(source.carbs ?? source.carbohydrates, 0),
-    fat: snapNumber(source.fat ?? source.fats, 0),
+    kcal: hasItemTotals ? totals.kcal : snapNumber(source.kcal ?? source.calories, 0),
+    protein: hasItemTotals ? totals.protein : snapNumber(source.protein ?? source.pro ?? source.proteins, 0),
+    carbs: hasItemTotals ? totals.carbs : snapNumber(source.carbs ?? source.carbohydrates, 0),
+    fat: hasItemTotals ? totals.fat : snapNumber(source.fat ?? source.fats, 0),
     items,
     confidence,
     needsReview: source.needsReview !== false
@@ -352,6 +398,11 @@ function hasSnapFoodText(desc) {
 function snapNumber(value, fallback) {
   const n = Number(String(value ?? '').replace(/[^\d.-]/g, ''));
   return Number.isFinite(n) ? Math.max(0, Math.round(n)) : fallback;
+}
+
+function snapPositiveNumber(value, fallback) {
+  const n = Number(String(value ?? '').replace(/[^\d.-]/g, ''));
+  return Number.isFinite(n) && n > 0 ? n : fallback;
 }
 
 function estimateSnapMealLocally(desc) {
@@ -490,6 +541,102 @@ function readSnapPreviewEdits() {
   }, document.getElementById('snapDescArea').value.trim());
 }
 
+function renderSnapResult(result) {
+  snapIdentified = normalizeSnapMeal(result, document.getElementById('snapDescArea').value.trim());
+  pendingSnapResult = snapIdentified;
+  const container = document.getElementById('snapResult');
+  container.innerHTML = `
+    <div style="display:grid;grid-template-columns:54px 1fr;gap:8px;margin-bottom:10px;">
+      <input id="snapEditEmoji" value="${escapeSnapAttr(snapIdentified.emoji)}" aria-label="Emoji" oninput="updateSnapMealField('emoji', this.value)" style="width:100%;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--font);font-size:18px;text-align:center;">
+      <input id="snapEditName" value="${escapeSnapAttr(snapIdentified.name)}" aria-label="Meal name" oninput="updateSnapMealField('name', this.value)" style="min-width:0;background:var(--bg);color:var(--text);border:1px solid var(--border);border-radius:8px;padding:8px;font-family:var(--font);font-weight:700;">
+    </div>
+    <div style="font-size:11px;color:var(--muted);margin-bottom:8px;">Final values - Edit before logging. Your edits override AI.</div>
+    <div id="snapItemsEditor">
+      ${snapIdentified.items.map((item, index) => renderSnapFoodItemEditor(item, index)).join('')}
+    </div>
+    <div id="snapFinalTotals">${renderSnapFinalTotals(snapIdentified)}</div>
+    <div style="font-size:11px;color:var(--muted);margin-top:8px;">Confidence: ${snapIdentified.confidence} ${snapIdentified.needsReview ? '- review needed' : ''}</div>
+  `;
+  container.style.display = 'block';
+  renderSnapActionButtons();
+}
+
+function renderSnapFoodItemEditor(item, index) {
+  const normalized = normalizeSnapFoodItem(item);
+  return `
+    <div class="snap-food-edit-card">
+      <div class="snap-food-edit-grid">
+        <label>Food<input value="${escapeSnapAttr(normalized.name)}" oninput="updateSnapFoodField(${index}, 'name', this.value)"></label>
+        <label>Quantity<input value="${escapeSnapAttr(normalized.qty)}" oninput="updateSnapFoodField(${index}, 'qty', this.value)"></label>
+        <label>Multiplier<input type="number" min="0.1" step="0.1" value="${normalized.qtyMultiplier}" oninput="updateSnapFoodField(${index}, 'qtyMultiplier', this.value)"></label>
+        <label>Calories<input type="number" min="0" value="${normalized.cal}" oninput="updateSnapFoodField(${index}, 'cal', this.value)"></label>
+        <label>Protein<input type="number" min="0" value="${normalized.pro}" oninput="updateSnapFoodField(${index}, 'pro', this.value)"></label>
+        <label>Carbs<input type="number" min="0" value="${normalized.carbs}" oninput="updateSnapFoodField(${index}, 'carbs', this.value)"></label>
+        <label>Fat<input type="number" min="0" value="${normalized.fat}" oninput="updateSnapFoodField(${index}, 'fat', this.value)"></label>
+      </div>
+    </div>`;
+}
+
+function renderSnapFinalTotals(result) {
+  const totals = calculateSnapTotals(result?.items || []);
+  return `
+    <div class="snap-final-values">
+      <strong>Reviewed estimate</strong>
+      <span>${totals.kcal} kcal - ${totals.protein}g protein - ${totals.carbs}g carbs - ${totals.fat}g fat</span>
+    </div>`;
+}
+
+function refreshSnapTotals() {
+  if (!pendingSnapResult) return;
+  const totals = calculateSnapTotals(pendingSnapResult.items);
+  pendingSnapResult.kcal = totals.kcal;
+  pendingSnapResult.protein = totals.protein;
+  pendingSnapResult.carbs = totals.carbs;
+  pendingSnapResult.fat = totals.fat;
+  snapIdentified = pendingSnapResult;
+  const totalEl = document.getElementById('snapFinalTotals');
+  if (totalEl) totalEl.innerHTML = renderSnapFinalTotals(pendingSnapResult);
+}
+
+function updateSnapMealField(field, value) {
+  if (!pendingSnapResult) return;
+  if (field !== 'name' && field !== 'emoji') return;
+  pendingSnapResult[field] = String(value || '').trim() || pendingSnapResult[field];
+  pendingSnapResult.needsReview = false;
+  snapIdentified = pendingSnapResult;
+}
+
+function updateSnapFoodField(index, field, value) {
+  if (!pendingSnapResult?.items?.[index]) return;
+  const item = normalizeSnapFoodItem(pendingSnapResult.items[index]);
+  if (field === 'qtyMultiplier') {
+    const multiplier = snapPositiveNumber(value, item.qtyMultiplier || 1);
+    item.qtyMultiplier = multiplier;
+    if (!item.manualOverrides.cal) item.cal = Math.round(item.baseCal * multiplier);
+    if (!item.manualOverrides.pro) item.pro = Math.round(item.basePro * multiplier);
+    if (!item.manualOverrides.carbs) item.carbs = Math.round(item.baseCarbs * multiplier);
+    if (!item.manualOverrides.fat) item.fat = Math.round(item.baseFat * multiplier);
+  } else if (['cal', 'pro', 'carbs', 'fat'].includes(field)) {
+    item[field] = snapNumber(value, 0);
+    item.manualOverrides[field] = true;
+  } else if (field === 'name' || field === 'qty') {
+    item[field] = String(value || '').trim();
+  } else {
+    return;
+  }
+  item.edited = true;
+  item.source = 'manual_edit';
+  pendingSnapResult.items[index] = normalizeSnapFoodItem(item);
+  pendingSnapResult.needsReview = false;
+  refreshSnapTotals();
+}
+
+function readSnapPreviewEdits() {
+  if (!pendingSnapResult) return null;
+  refreshSnapTotals();
+  return normalizeSnapMeal(pendingSnapResult, document.getElementById('snapDescArea').value.trim());
+}
+
 function logSnapAsExtra() {
   logSnapEntryFromPreview(null);
 }
@@ -521,6 +668,16 @@ function logSnapEntryFromPreview(swapMealId) {
     carbs: food.carbs || 0,
     fat: food.fat || 0,
     items: food.items,
+    foods: food.items.map(item => ({
+      name: item.name,
+      qty: item.qty,
+      cal: item.cal,
+      pro: item.pro,
+      carbs: item.carbs || 0,
+      fat: item.fat || 0,
+      edited: !!item.edited,
+      source: item.source || 'ai_scan'
+    })),
     confidence: food.confidence,
     needsReview: food.needsReview,
     time: timeStr,
@@ -529,7 +686,7 @@ function logSnapEntryFromPreview(swapMealId) {
   });
 
   if (swapMealId) {
-    state.checked[todayKey() + '_' + swapMealId] = true;
+    delete state.checked[todayKey() + '_' + swapMealId];
   }
 
   saveState();

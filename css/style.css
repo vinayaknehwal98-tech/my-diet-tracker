@@ -675,6 +675,53 @@
   }
   .snap-action-btn:hover { border-color: var(--accent2); }
   .snap-action-btn.primary { border-color: var(--accent2); color: var(--accent2); font-weight: 600; }
+  .snap-food-edit-card {
+    background: rgba(255,255,255,0.035);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 9px;
+    margin-bottom: 8px;
+  }
+  .snap-food-edit-grid {
+    display: grid;
+    grid-template-columns: 1.2fr 1fr 0.7fr;
+    gap: 7px;
+  }
+  .snap-food-edit-grid label {
+    min-width: 0;
+    color: var(--muted);
+    font-size: 10px;
+    font-family: var(--font);
+    font-weight: 700;
+  }
+  .snap-food-edit-grid input {
+    width: 100%;
+    margin-top: 4px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    color: var(--text);
+    border-radius: 8px;
+    padding: 8px;
+    font-family: var(--body);
+    outline: none;
+  }
+  .snap-food-edit-grid input:focus { border-color: var(--accent2); }
+  .snap-final-values {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    align-items: center;
+    background: rgba(45,212,191,0.08);
+    border: 1px solid rgba(45,212,191,0.18);
+    border-radius: 10px;
+    padding: 9px 10px;
+    color: var(--text);
+    font-size: 12px;
+  }
+  .snap-final-values span {
+    color: var(--muted);
+    text-align: right;
+  }
 
   /* IMPORT BUTTON */
   .import-btn {

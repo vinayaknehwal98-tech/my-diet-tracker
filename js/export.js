@@ -214,6 +214,33 @@ function exportToExcel() {
     mealRows.push(['','','','','','','']); // spacer
   });
 
+  (state.extraMeals || []).forEach(extra => {
+    const foods = extra.foods || extra.items || [];
+    if (!foods.length) {
+      mealRows.push([
+        extra.swappedFor ? `Swap for ${extra.swappedFor}` : 'Extra meal',
+        extra.time || '',
+        extra.name,
+        '',
+        extra.kcal || 0,
+        extra.protein || 0,
+        `Total: ${extra.kcal || 0} kcal, ${extra.protein || 0}g P, ${extra.carbs || 0}g C, ${extra.fat || 0}g F`
+      ]);
+      return;
+    }
+    foods.forEach((food, fi) => {
+      mealRows.push([
+        fi === 0 ? (extra.swappedFor ? `Swap for ${extra.swappedFor}` : 'Extra meal') : '',
+        fi === 0 ? (extra.time || '') : '',
+        food.name || extra.name,
+        food.qty || '',
+        food.cal ?? food.kcal ?? 0,
+        food.pro ?? food.protein ?? 0,
+        fi === 0 ? `Total: ${extra.kcal || 0} kcal, ${extra.protein || 0}g P, ${extra.carbs || 0}g C, ${extra.fat || 0}g F` : ''
+      ]);
+    });
+    mealRows.push(['','','','','','','']);
+  });
   // Sheet 3 — Water Log
   const waterRows = [['Date','Glasses','Litres','Goal Hit (8 glasses = 2L)']];
   for (let i = 0; i < localStorage.length; i++) {
