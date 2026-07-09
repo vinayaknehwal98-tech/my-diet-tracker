@@ -151,6 +151,10 @@ function exposeGlobals() {
     renderSnapResult,
     logSnapAsExtra,
     logSnapAsSwap,
+    normalizeSnapFoodItem,
+    updateSnapFoodField,
+    updateSnapMealField,
+    calculateSnapTotals,
     identifyFoodFromImage,
     identifyFoodFromText,
     showSnapResult,
@@ -248,7 +252,7 @@ function exposeGlobals() {
 
 
 // --- INIT ---
-console.log("Diet Tracker version: workout-completion-fix-1");
+console.log("Diet Tracker version: food-scan-edit-qty-1");
 exposeGlobals();
 renderAll();
 setTimeout(() => {
