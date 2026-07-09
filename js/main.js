@@ -154,6 +154,7 @@ function exposeGlobals() {
     logSnapAsExtra,
     logSnapAsSwap,
     normalizeSnapFoodItem,
+    estimateMissingSnapMacros,
     updateSnapFoodField,
     updateSnapMealField,
     calculateSnapTotals,
@@ -261,7 +262,7 @@ function exposeGlobals() {
 
 
 // --- INIT ---
-console.log("Diet Tracker version: photo-scan-fallback-1");
+console.log("Diet Tracker version: food-scan-macro-fix-1");
 exposeGlobals();
 renderAll();
 setTimeout(() => {
