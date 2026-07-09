@@ -96,8 +96,12 @@ function getWorkoutExportRows() {
         ? (findExerciseById(exerciseId) || { id: exerciseId, name: exerciseId })
         : { id: exerciseId, name: exerciseId };
       const normalized = normalizeExerciseLog(log, exercise);
+      if (typeof isExerciseActuallyLogged === 'function' && !isExerciseActuallyLogged(normalized)) return;
       const pattern = typeof detectSetPattern === 'function' ? detectSetPattern(normalized.sets) : '';
-      normalized.sets.forEach((set, index) => {
+      const exportSets = typeof getValidWorkoutSets === 'function'
+        ? getValidWorkoutSets(normalized.sets)
+        : normalized.sets;
+      exportSets.forEach((set, index) => {
         const weight = Number(set.weight);
         const reps = Number(set.reps);
         rows.push([
@@ -134,6 +138,7 @@ function getExerciseHistoryExportRows() {
         ? (findExerciseById(exerciseId) || { id: exerciseId, name: exerciseId })
         : { id: exerciseId, name: exerciseId };
       const normalized = normalizeExerciseLog(entry, exercise);
+      if (typeof isExerciseActuallyLogged === 'function' && !isExerciseActuallyLogged(normalized)) return;
       const top = typeof getTopSet === 'function' ? getTopSet(normalized.sets) : null;
       const totalReps = typeof getTotalRepsFromSets === 'function' ? getTotalRepsFromSets(normalized.sets) : '';
       const totalVolume = typeof calculateSetBasedVolume === 'function' ? calculateSetBasedVolume(normalized.sets) : '';
