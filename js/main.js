@@ -161,6 +161,13 @@ function exposeGlobals() {
     handleImportFile,
     onPasteInput,
     applyImport,
+    normalizeImportedFood,
+    normalizeImportedMeal,
+    isValidImportedFood,
+    isValidImportedMeal,
+    calculateMealTotalsFromFoods,
+    validateImportedDietPlan,
+    parseDietTextLocally,
     openAI,
     closeAI,
     sendAI,
@@ -248,7 +255,7 @@ function exposeGlobals() {
 
 
 // --- INIT ---
-console.log("Diet Tracker version: workout-completion-fix-1");
+console.log("Diet Tracker version: import-diet-fix-1");
 exposeGlobals();
 renderAll();
 setTimeout(() => {
