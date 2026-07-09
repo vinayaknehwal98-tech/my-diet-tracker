@@ -4,6 +4,7 @@ const WORKOUT_STORAGE_KEY = 'bulkWorkout_v1';
 let pendingWorkoutImport = null;
 let workoutStateCache = null;
 let workoutSaveTimer = null;
+let lastWorkoutAction = null;
 
 function defaultWorkoutSplit() {
   return [
@@ -239,6 +240,7 @@ function renderWorkout() {
         <p>${status.completed}/${status.total} exercises logged. X says: ${escapeWorkoutHtml(getWorkoutStatusLine())}</p>
       </div>
       <div class="workout-hero-actions">
+        ${hasWorkoutUndo() ? '<button class="import-btn" onclick="undoLastWorkoutAction()">Undo</button>' : ''}
         <button class="import-btn" onclick="openWorkoutImportModal()">Import Workout</button>
         <button class="import-btn danger" onclick="resetTodayWorkout()">Reset Today</button>
         <button class="import-btn" onclick="restoreDefaultWorkoutSplit()">Restore Default Split</button>
@@ -325,7 +327,7 @@ function renderWorkoutExercise(exercise, index) {
   const pr = detectPersonalRecord(exercise, todayLog, history);
   const repsValue = Array.isArray(todayLog.reps) ? todayLog.reps.join(',') : '';
   return `
-    <article class="workout-card ${todayLog.completed ? 'complete' : ''}">
+    <article class="workout-card ${isExerciseActuallyLogged(todayLog) ? 'complete' : ''}">
       <div class="workout-card-head">
         <div>
           <div class="workout-ex-num">${index + 1}</div>
@@ -333,7 +335,7 @@ function renderWorkoutExercise(exercise, index) {
           <p>${escapeWorkoutHtml(exercise.targetText)}</p>
         </div>
         <label class="workout-done">
-          <input type="checkbox" id="wo_done_${exercise.id}" ${todayLog.completed ? 'checked' : ''} onchange="saveWorkoutLog(true, { updateMemory: true })">
+          <input type="checkbox" id="wo_done_${exercise.id}" ${todayLog.completed ? 'checked' : ''} onchange="handleExerciseDoneToggle('${exercise.id}')">
           <span>Done</span>
         </label>
       </div>
@@ -398,6 +400,7 @@ function saveWorkoutLog(silent = false) {
 
 function resetTodayWorkout() {
   if (!confirm("Reset today's workout log? Older workout history stays saved.")) return;
+  rememberWorkoutAction('reset workout');
   const workoutState = getWorkoutState();
   delete workoutState.logs[todayKey()];
   workoutState.exerciseHistory = buildExerciseHistory(workoutState.logs);
@@ -537,19 +540,25 @@ function buildExerciseHistory(logs) {
 function getTodayWorkoutStatus() {
   const workout = getTodayWorkout();
   const log = getWorkoutLog();
-  const completed = Object.values(log.exercises || {}).filter(item => item.completed).length;
+  const normalizedLogs = {};
+  workout.exercises.forEach(exercise => {
+    normalizedLogs[exercise.id] = normalizeExerciseLog(log.exercises?.[exercise.id] || {}, exercise);
+  });
+  const loggedExercises = Object.values(normalizedLogs).filter(isExerciseActuallyLogged).length;
+  const completedExercises = Object.values(normalizedLogs).filter(isExerciseActuallyCompleted).length;
   const total = workout.exercises.length;
-  const currentVolume = Object.values(log.exercises || {}).reduce((sum, item) => sum + calculateVolume(item.weight, item.reps), 0);
+  const currentVolume = Object.values(normalizedLogs).reduce((sum, item) => sum + (calculateSetBasedVolume(item.sets) || calculateVolume(item.weight, item.reps)), 0);
   const lastWorkoutVolume = getPreviousWorkoutVolume(workout.id);
   return {
     workout,
-    completed,
+    completed: loggedExercises,
     total,
-    completionPercent: total ? Math.round((completed / total) * 100) : 100,
-    completedExercises: completed,
-    pendingExercises: workout.exercises.filter(exercise => !log.exercises[exercise.id]?.completed),
-    dayLog: log,
-    completedWorkout: total > 0 && completed === total,
+    completionPercent: total ? Math.round((loggedExercises / total) * 100) : 100,
+    loggedExercises,
+    completedExercises,
+    pendingExercises: workout.exercises.filter(exercise => !isExerciseActuallyLogged(normalizedLogs[exercise.id])),
+    dayLog: { ...log, exercises: normalizedLogs },
+    completedWorkout: total > 0 && completedExercises === total,
     currentVolume,
     lastWorkoutVolume,
     volumeDelta: currentVolume - lastWorkoutVolume,
@@ -605,7 +614,10 @@ function getWorkoutWeeklyReview() {
     if (!workout || workout.rest || !workout.exercises.length) continue;
     trainingDays++;
     const log = workoutState.logs[key];
-    const doneCount = Object.values(log?.exercises || {}).filter(item => item.completed).length;
+    const doneCount = (workout.exercises || []).filter(exercise => {
+      const normalized = normalizeExerciseLog(log?.exercises?.[exercise.id] || {}, exercise);
+      return isExerciseActuallyLogged(normalized);
+    }).length;
     exercisesLogged += doneCount;
     if (doneCount === workout.exercises.length) sessionsCompleted++;
     else if (key < todayKey()) missedWorkoutDays.push(dayName);
@@ -941,11 +953,16 @@ function updateXCoachMemoryFromDiet() {
 function updateXCoachMemoryFromWorkoutLog(workoutLog) {
   const memory = getXCoachMemory();
   if (!workoutLog) return memory;
+  const realExerciseEntries = Object.entries(workoutLog.exercises || {}).filter(([exerciseId, log]) => {
+    const exercise = findExerciseById(exerciseId) || { id: exerciseId, name: humanizeWorkoutId(exerciseId), targetText: '' };
+    return isExerciseActuallyLogged(normalizeExerciseLog(log, exercise));
+  });
+  if (!realExerciseEntries.length) return memory;
   if (!workoutLog.completed && workoutLog.dayName) {
     memory.learnedPatterns.frequentlyMissedWorkoutDays[workoutLog.dayName] = (memory.learnedPatterns.frequentlyMissedWorkoutDays[workoutLog.dayName] || 0) + 1;
   }
   if (getDietRecoveryContext().underfed) memory.learnedPatterns.underfedWorkoutCount += 1;
-  Object.entries(workoutLog.exercises || {}).forEach(([exerciseId, log]) => {
+  realExerciseEntries.forEach(([exerciseId, log]) => {
     const exercise = findExerciseById(exerciseId) || { id: exerciseId, name: humanizeWorkoutId(exerciseId), targetText: '' };
     updateExerciseMemory(exercise, log, memory);
   });
@@ -954,10 +971,13 @@ function updateXCoachMemoryFromWorkoutLog(workoutLog) {
 }
 
 function updateExerciseMemory(exercise, log, memory = getXCoachMemory()) {
+  const normalized = normalizeExerciseLog(log, exercise);
+  if (!isExerciseActuallyLogged(normalized)) return null;
   const id = workoutId(exercise.id || exercise.name);
-  const volume = calculateVolume(log.weight, log.reps);
-  const totalReps = (log.reps || []).reduce((sum, reps) => sum + reps, 0);
-  const notes = String(log.notes || '');
+  const topSet = getTopSet(normalized.sets);
+  const volume = calculateSetBasedVolume(normalized.sets) || 0;
+  const totalReps = getTotalRepsFromSets(normalized.sets);
+  const notes = String(normalized.notes || '');
   const pain = hasPainNotes(notes);
   const item = memory.exerciseMemory[id] || {
     bestWeight: 0,
@@ -970,10 +990,10 @@ function updateExerciseMemory(exercise, log, memory = getXCoachMemory()) {
     notesSummary: '',
     lastUpdated: null
   };
-  item.bestWeight = Math.max(item.bestWeight || 0, Number(log.weight) || 0);
+  item.bestWeight = Math.max(item.bestWeight || 0, topSet?.weight || 0);
   item.bestVolume = Math.max(item.bestVolume || 0, volume);
   item.bestReps = Math.max(item.bestReps || 0, totalReps);
-  if (!pain && log.completed) item.lastGoodWeight = Number(log.weight) || item.lastGoodWeight || 0;
+  if (!pain && isExerciseActuallyCompleted(normalized)) item.lastGoodWeight = topSet?.weight || item.lastGoodWeight || 0;
   if (pain) {
     item.painFlags = (item.painFlags || 0) + 1;
     memory.learnedPatterns.painExercises[exercise.name] = (memory.learnedPatterns.painExercises[exercise.name] || 0) + 1;
@@ -994,7 +1014,7 @@ function inferUserPatterns() {
     if (isPlateaued(sessions)) memory.learnedPatterns.plateauExercises[exercise.name] = Math.max(memory.learnedPatterns.plateauExercises[exercise.name] || 0, 3);
     const painCount = sessions.filter(item => hasPainNotes(item.notes)).length;
     if (painCount) memory.learnedPatterns.painExercises[exercise.name] = Math.max(memory.learnedPatterns.painExercises[exercise.name] || 0, painCount);
-    const bestVolume = Math.max(...sessions.map(item => calculateVolume(item.weight, item.reps)), 0);
+    const bestVolume = Math.max(...sessions.map(item => calculateSetBasedVolume(normalizeExerciseLog(item, exercise).sets) || calculateVolume(item.weight, item.reps)), 0);
     if (bestVolume) memory.learnedPatterns.strongestExercises[exercise.name] = Math.max(memory.learnedPatterns.strongestExercises[exercise.name] || 0, bestVolume);
   });
   saveXCoachMemory(memory);
@@ -1165,12 +1185,16 @@ function getWorkoutWeeklyReview() {
     if (!workout || workout.rest || !workout.exercises.length) continue;
     trainingDays++;
     const log = workoutState.logs[key];
-    const doneCount = Object.values(log?.exercises || {}).filter(item => item.completed).length;
+    const doneCount = (workout.exercises || []).filter(exercise => {
+      const normalized = normalizeExerciseLog(log?.exercises?.[exercise.id] || {}, exercise);
+      return isExerciseActuallyLogged(normalized);
+    }).length;
     exercisesLogged += doneCount;
     if (doneCount === workout.exercises.length) sessionsCompleted++;
     else if (key < todayKey()) missedWorkoutDays.push(dayName);
     Object.entries(log?.exercises || {}).forEach(([id, entry]) => {
       const exercise = findExerciseById(id) || { id, name: humanizeWorkoutId(id) };
+      if (!isExerciseActuallyLogged(normalizeExerciseLog(entry, exercise))) return;
       const badges = detectPersonalRecord(exercise, entry, getExerciseHistory(id));
       prCount += badges.filter(b => /PR/.test(b)).length;
       if (hasPainNotes(entry.notes)) painCount++;
@@ -1343,15 +1367,24 @@ function normalizeSetRow(row = {}, index = 0) {
   const weight = workoutNumberOrBlank(row.weight);
   const reps = workoutTextOrBlank(row.reps);
   const rir = workoutNumberOrBlank(row.rir);
-  const hasReps = reps !== '' && String(reps).trim() !== '0';
-  const hasWeight = weight !== '' && Number(weight) > 0;
   return {
     setNumber: Number(row.setNumber) || index + 1,
     weight,
     reps,
     rir,
-    completed: !!row.completed || hasReps || hasWeight
+    completed: !!row.completed
   };
+}
+
+function isValidWorkoutSet(row = {}) {
+  const reps = getSetNumericReps(row);
+  const weight = Number(row?.weight);
+  const hasWeight = Number.isFinite(weight) && weight > 0;
+  return reps > 0 || hasWeight || (!!row?.completed && reps > 0);
+}
+
+function getValidWorkoutSets(setRows = []) {
+  return (Array.isArray(setRows) ? setRows : []).map(normalizeSetRow).filter(isValidWorkoutSet);
 }
 
 function getDefaultSetRows(exercise) {
@@ -1399,7 +1432,7 @@ function normalizeExerciseLog(log = {}, exercise = {}) {
     sets,
     rir: base.rir ?? null,
     notes: base.notes || '',
-    completed: !!base.completed || isExerciseCompletedFromSets(sets),
+    completed: !!base.completed,
     timestamp: base.timestamp || new Date().toISOString()
   };
 }
@@ -1410,7 +1443,7 @@ function getSetNumericReps(row) {
 }
 
 function calculateSetBasedVolume(setRows = []) {
-  const rows = Array.isArray(setRows) ? setRows : [];
+  const rows = getValidWorkoutSets(setRows);
   let volume = 0;
   let hasWeightedSet = false;
   rows.forEach(row => {
@@ -1425,15 +1458,39 @@ function calculateSetBasedVolume(setRows = []) {
 }
 
 function getTotalRepsFromSets(setRows = []) {
-  return (Array.isArray(setRows) ? setRows : []).reduce((sum, row) => sum + getSetNumericReps(row), 0);
+  return getValidWorkoutSets(setRows).reduce((sum, row) => sum + getSetNumericReps(row), 0);
 }
 
 function isExerciseCompletedFromSets(setRows = []) {
-  return (Array.isArray(setRows) ? setRows : []).some(row => row?.completed || getSetNumericReps(row) > 0 || Number(row?.weight) > 0);
+  return getValidWorkoutSets(setRows).length > 0;
+}
+
+function isExerciseActuallyLogged(exerciseLog = {}) {
+  const normalized = normalizeExerciseLog(exerciseLog);
+  return getValidWorkoutSets(normalized.sets).length > 0;
+}
+
+function isExerciseActuallyCompleted(exerciseLog = {}) {
+  const normalized = normalizeExerciseLog(exerciseLog);
+  return !!normalized.completed && isExerciseActuallyLogged(normalized);
+}
+
+function cleanEmptyExerciseLog(exerciseLog = {}, exercise = {}) {
+  const normalized = normalizeExerciseLog(exerciseLog, exercise);
+  const validSets = getValidWorkoutSets(normalized.sets);
+  if (!validSets.length) return null;
+  const numericRirs = validSets.map(row => Number(row.rir)).filter(Number.isFinite);
+  return {
+    sets: normalized.sets,
+    rir: numericRirs.length ? Math.round((numericRirs.reduce((sum, value) => sum + value, 0) / numericRirs.length) * 10) / 10 : null,
+    notes: normalized.notes || '',
+    completed: !!normalized.completed,
+    timestamp: normalized.timestamp || new Date().toISOString()
+  };
 }
 
 function getTopSet(setRows = []) {
-  const valid = (Array.isArray(setRows) ? setRows : [])
+  const valid = getValidWorkoutSets(setRows)
     .map((row, index) => ({ ...row, setNumber: row.setNumber || index + 1, reps: getSetNumericReps(row), weight: Number(row.weight) || 0 }))
     .filter(row => row.reps > 0 || row.weight > 0);
   if (!valid.length) return null;
@@ -1441,7 +1498,7 @@ function getTopSet(setRows = []) {
 }
 
 function detectSetPattern(setRows = []) {
-  const rows = (Array.isArray(setRows) ? setRows : [])
+  const rows = getValidWorkoutSets(setRows)
     .map(row => ({ weight: Number(row.weight) || 0, reps: getSetNumericReps(row) }))
     .filter(row => row.reps > 0 || row.weight > 0);
   if (rows.length < 2) return 'straight_sets';
@@ -1463,7 +1520,7 @@ function detectSetPattern(setRows = []) {
 }
 
 function getBackoffPerformance(setRows = []) {
-  const rows = (Array.isArray(setRows) ? setRows : []).map(normalizeSetRow);
+  const rows = getValidWorkoutSets(setRows);
   const top = getTopSet(rows);
   if (!top) return { sets: [], totalReps: 0, volume: null, summary: 'none' };
   const backoff = rows.filter(row => (row.setNumber || 0) > top.setNumber && (getSetNumericReps(row) > 0 || Number(row.weight) > 0));
@@ -1510,6 +1567,45 @@ function totalReps(log) {
   return (log?.reps || []).reduce((sum, reps) => sum + (Number(reps) || 0), 0);
 }
 
+function cloneWorkoutData(value) {
+  try {
+    return structuredClone(value);
+  } catch(e) {
+    return JSON.parse(JSON.stringify(value || null));
+  }
+}
+
+function rememberWorkoutAction(label) {
+  const workoutState = getWorkoutState();
+  lastWorkoutAction = {
+    label,
+    state: cloneWorkoutData(workoutState),
+    timestamp: new Date().toISOString()
+  };
+}
+
+function undoLastWorkoutAction() {
+  if (!lastWorkoutAction?.state) {
+    showToast('Nothing to undo.');
+    return;
+  }
+  const restored = normalizeWorkoutState(lastWorkoutAction.state);
+  workoutStateCache = restored;
+  saveWorkoutState(restored);
+  const label = lastWorkoutAction.label || 'change';
+  lastWorkoutAction = null;
+  showToast(`Undid ${label}.`);
+  renderAll();
+}
+
+function hasWorkoutUndo() {
+  return !!lastWorkoutAction?.state;
+}
+
+function dayLogHasRealWorkoutData(dayLog = {}) {
+  return Object.values(dayLog.exercises || {}).some(isExerciseActuallyLogged);
+}
+
 function getExerciseSetData(exerciseId) {
   const exercise = findExerciseById(exerciseId) || { id: exerciseId, name: exerciseId };
   const count = Number(document.getElementById(`wo_set_count_${exerciseId}`)?.value) || getDefaultSetRows(exercise).length;
@@ -1534,8 +1630,12 @@ function saveWorkoutSetRows(exerciseId, setRows) {
   const exercise = findExerciseById(exerciseId) || { id: exerciseId };
   const previous = normalizeExerciseLog(dayLog.exercises[exerciseId] || dayLog.exercises[workoutId(exerciseId)] || {}, exercise);
   const normalized = normalizeExerciseLog({ ...previous, sets: setRows }, exercise);
-  dayLog.exercises[exercise.id || exerciseId] = normalized;
-  workoutState.logs[date] = dayLog;
+  const cleaned = cleanEmptyExerciseLog(normalized, exercise);
+  if (cleaned) dayLog.exercises[exercise.id || exerciseId] = cleaned;
+  else delete dayLog.exercises[exercise.id || exerciseId];
+  dayLog.completed = workout.exercises.length > 0 && workout.exercises.every(item => isExerciseActuallyCompleted(dayLog.exercises[item.id]));
+  if (dayLogHasRealWorkoutData(dayLog)) workoutState.logs[date] = dayLog;
+  else delete workoutState.logs[date];
   workoutState.exerciseHistory = buildExerciseHistory(workoutState.logs);
   saveWorkoutState(workoutState);
 }
@@ -1555,6 +1655,7 @@ function removeLastSetRow(exerciseId) {
   const exercise = findExerciseById(exerciseId) || { id: exerciseId };
   const log = normalizeExerciseLog(getWorkoutLog().exercises[exercise.id] || {}, exercise);
   if (log.sets.length <= 1) return;
+  rememberWorkoutAction('removed set');
   log.sets.pop();
   saveWorkoutSetRows(exercise.id, log.sets);
   renderAll();
@@ -1577,6 +1678,49 @@ function updateSetField(exerciseId, setIndex, field, value) {
   const input = document.getElementById(`wo_set_${field}_${exerciseId}_${setIndex}`);
   if (input && input.value !== String(value ?? '')) input.value = value;
   debouncedSaveWorkoutLog();
+}
+
+function handleExerciseDoneToggle(exerciseId) {
+  rememberWorkoutAction('done toggle');
+  const exercise = findExerciseById(exerciseId) || { id: exerciseId };
+  const sets = getExerciseSetData(exerciseId);
+  const hasRealData = isExerciseActuallyLogged({ sets });
+  if (!hasRealData && document.getElementById(`wo_done_${exerciseId}`)?.checked) {
+    showToast('Add reps/weight before marking this exercise done.');
+  }
+  saveWorkoutLog(true, { updateMemory: hasRealData });
+  renderAll();
+}
+
+function handleSetDoneToggle(exerciseId) {
+  rememberWorkoutAction('set done toggle');
+  const sets = getExerciseSetData(exerciseId);
+  if (!isExerciseActuallyLogged({ sets })) {
+    showToast('Add reps/weight before marking this set done.');
+  }
+  saveWorkoutLog(true, { updateMemory: isExerciseActuallyLogged({ sets }) });
+  renderAll();
+}
+
+function clearExerciseLog(exerciseId) {
+  saveWorkoutLog(true);
+  const workoutState = getWorkoutState();
+  const workout = getTodayWorkout();
+  const date = todayKey();
+  const dayLog = workoutState.logs[date] || createEmptyWorkoutLog(workout);
+  const exercise = findExerciseById(exerciseId) || { id: exerciseId, name: humanizeWorkoutId(exerciseId) };
+  const current = normalizeExerciseLog(dayLog.exercises?.[exercise.id] || {}, exercise);
+  if (isExerciseActuallyLogged(current) && !confirm(`Clear ${exercise.name || 'this exercise'}?`)) return;
+  rememberWorkoutAction('cleared exercise');
+  dayLog.exercises = dayLog.exercises || {};
+  delete dayLog.exercises[exercise.id];
+  dayLog.completed = workout.exercises.length > 0 && workout.exercises.every(item => isExerciseActuallyCompleted(dayLog.exercises[item.id]));
+  if (dayLogHasRealWorkoutData(dayLog)) workoutState.logs[date] = dayLog;
+  else delete workoutState.logs[date];
+  workoutState.exerciseHistory = buildExerciseHistory(workoutState.logs);
+  saveWorkoutState(workoutState);
+  showToast('Exercise cleared. Undo available.');
+  renderAll();
 }
 
 function applyWeightToAllSets(exerciseId) {
@@ -1629,7 +1773,7 @@ function renderExerciseSetRows(exercise, setRows) {
           <label class="set-cell"><span>Weight</span><input type="number" inputmode="decimal" step="0.5" id="wo_set_weight_${id}_${index}" value="${escapeWorkoutHtml(row.weight)}" placeholder="kg" oninput="updateSetField('${id}', ${index}, 'weight', this.value)"></label>
           <label class="set-cell"><span>Reps</span><input type="text" inputmode="decimal" id="wo_set_reps_${id}_${index}" value="${escapeWorkoutHtml(row.reps)}" placeholder="${placeholderForExercise(exercise).split(',')[index] || ''}" oninput="updateSetField('${id}', ${index}, 'reps', this.value)"></label>
           <label class="set-cell"><span>RIR</span><input type="number" inputmode="numeric" id="wo_set_rir_${id}_${index}" value="${escapeWorkoutHtml(row.rir)}" placeholder="2" oninput="updateSetField('${id}', ${index}, 'rir', this.value)"></label>
-          <label class="set-cell set-done-cell"><span>Done</span><input type="checkbox" id="wo_set_done_${id}_${index}" ${row.completed ? 'checked' : ''} onchange="saveWorkoutLog(true, { updateMemory: true })"></label>
+          <label class="set-cell set-done-cell"><span>Done</span><input type="checkbox" id="wo_set_done_${id}_${index}" ${row.completed ? 'checked' : ''} onchange="handleSetDoneToggle('${id}')"></label>
           <div class="set-cell"><button class="copy-set-btn" type="button" onclick="copyPreviousSet('${id}', ${index})" ${index === 0 ? 'disabled' : ''}>Copy</button></div>
         </div>`).join('')}
     </div>
@@ -1649,7 +1793,7 @@ function renderWorkoutExercise(exercise, index, cached = null) {
   const suggestion = cached?.suggestion || getProgressiveOverloadSuggestion(exercise, history);
   const pr = cached?.pr || detectPersonalRecord(exercise, todayLog, history);
   return `
-    <article class="workout-card ${todayLog.completed ? 'complete' : ''}">
+    <article class="workout-card ${isExerciseActuallyLogged(todayLog) ? 'complete' : ''}">
       <div class="workout-card-head">
         <div>
           <div class="workout-ex-num">${index + 1}</div>
@@ -1657,7 +1801,7 @@ function renderWorkoutExercise(exercise, index, cached = null) {
           <p>${escapeWorkoutHtml(exercise.targetText)}</p>
         </div>
         <label class="workout-done">
-          <input type="checkbox" id="wo_done_${exercise.id}" ${todayLog.completed ? 'checked' : ''} onchange="saveWorkoutLog(true, { updateMemory: true })">
+          <input type="checkbox" id="wo_done_${exercise.id}" ${todayLog.completed ? 'checked' : ''} onchange="handleExerciseDoneToggle('${exercise.id}')">
           <span>Done</span>
         </label>
       </div>
@@ -1669,6 +1813,9 @@ function renderWorkoutExercise(exercise, index, cached = null) {
         ${pr.map(label => `<span class="pr-badge">${escapeWorkoutHtml(label)}</span>`).join('') || `<span class="progression-badge">${escapeWorkoutHtml(detectSetPattern(todayLog.sets))}</span>`}
       </div>
       ${renderExerciseSetRows(exercise, todayLog.sets)}
+      <div class="workout-card-actions">
+        <button class="clear-exercise-btn" type="button" onclick="clearExerciseLog('${exercise.id}')">Clear Exercise</button>
+      </div>
       <textarea class="workout-notes" id="wo_notes_${exercise.id}" placeholder="Notes, form cues, machine setting..." oninput="debouncedSaveWorkoutLog()">${escapeWorkoutHtml(todayLog.notes || '')}</textarea>
     </article>`;
 }
@@ -1703,21 +1850,24 @@ function saveWorkoutLog(silent = false, options = {}) {
     const sets = getExerciseSetData(exercise.id);
     const notes = document.getElementById(`wo_notes_${exercise.id}`)?.value ?? previous.notes ?? '';
     const manualCompleted = !!document.getElementById(`wo_done_${exercise.id}`)?.checked;
-    const completed = manualCompleted || isExerciseCompletedFromSets(sets);
-    const numericRirs = sets.map(row => Number(row.rir)).filter(Number.isFinite);
-    dayLog.exercises[exercise.id] = {
+    const completed = manualCompleted;
+    const draft = {
       sets,
-      rir: numericRirs.length ? Math.round((numericRirs.reduce((sum, value) => sum + value, 0) / numericRirs.length) * 10) / 10 : null,
       notes,
       completed,
       timestamp: new Date().toISOString()
     };
+    const cleaned = cleanEmptyExerciseLog(draft, exercise);
+    if (cleaned) dayLog.exercises[exercise.id] = cleaned;
+    else delete dayLog.exercises[exercise.id];
   });
 
-  dayLog.completed = workout.exercises.length > 0 && workout.exercises.every(exercise => dayLog.exercises[exercise.id]?.completed);
-  workoutState.logs[date] = dayLog;
+  dayLog.completed = workout.exercises.length > 0 && workout.exercises.every(exercise => isExerciseActuallyCompleted(dayLog.exercises[exercise.id]));
+  const hasRealWorkoutData = dayLogHasRealWorkoutData(dayLog);
+  if (hasRealWorkoutData) workoutState.logs[date] = dayLog;
+  else delete workoutState.logs[date];
   workoutState.exerciseHistory = buildExerciseHistory(workoutState.logs);
-  if (!silent || options.updateMemory || dayLog.completed) updateXCoachMemoryFromWorkoutLog(dayLog);
+  if (hasRealWorkoutData && (!silent || options.updateMemory || dayLog.completed)) updateXCoachMemoryFromWorkoutLog(dayLog);
   saveWorkoutState(workoutState);
   if (!silent) {
     showToast('Workout saved.');
@@ -1732,7 +1882,7 @@ function buildExerciseHistory(logs) {
     Object.entries(dayLog.exercises || {}).forEach(([exerciseId, log]) => {
       const exercise = findExerciseById(exerciseId) || { id: exerciseId, name: humanizeWorkoutId(exerciseId) };
       const normalized = normalizeExerciseLog(log, exercise);
-      if (!normalized.completed && !isExerciseCompletedFromSets(normalized.sets)) return;
+      if (!isExerciseActuallyLogged(normalized)) return;
       const id = workoutId(exerciseId);
       const topSet = getTopSet(normalized.sets);
       const pattern = detectSetPattern(normalized.sets);
@@ -1744,10 +1894,10 @@ function buildExerciseHistory(logs) {
         workoutName: dayLog.workoutName,
         weight: topSet?.weight || 0,
         reps: normalized.sets.map(row => getSetNumericReps(row)).filter(Boolean),
-        sets: normalized.sets,
+        sets: getValidWorkoutSets(normalized.sets),
         rir: normalized.rir,
         notes: normalized.notes || '',
-        completed: normalized.completed,
+        completed: isExerciseActuallyCompleted(normalized),
         timestamp: normalized.timestamp || date,
         topSet,
         backoffPerformance: getBackoffPerformance(normalized.sets),
@@ -1780,19 +1930,21 @@ function getTodayWorkoutStatus() {
   workout.exercises.forEach(exercise => {
     normalizedLogs[exercise.id] = normalizeExerciseLog(log.exercises?.[exercise.id] || {}, exercise);
   });
-  const completed = Object.values(normalizedLogs).filter(item => item.completed).length;
+  const loggedExercises = Object.values(normalizedLogs).filter(isExerciseActuallyLogged).length;
+  const completedExercises = Object.values(normalizedLogs).filter(isExerciseActuallyCompleted).length;
   const total = workout.exercises.length;
   const currentVolume = Object.values(normalizedLogs).reduce((sum, item) => sum + (calculateSetBasedVolume(item.sets) || 0), 0);
   const lastWorkoutVolume = getPreviousWorkoutVolume(workout.id);
   return {
     workout,
-    completed,
+    completed: loggedExercises,
     total,
-    completionPercent: total ? Math.round((completed / total) * 100) : 100,
-    completedExercises: completed,
-    pendingExercises: workout.exercises.filter(exercise => !normalizedLogs[exercise.id]?.completed),
+    completionPercent: total ? Math.round((loggedExercises / total) * 100) : 100,
+    loggedExercises,
+    completedExercises,
+    pendingExercises: workout.exercises.filter(exercise => !isExerciseActuallyLogged(normalizedLogs[exercise.id])),
     dayLog: { ...log, exercises: normalizedLogs },
-    completedWorkout: total > 0 && completed === total,
+    completedWorkout: total > 0 && completedExercises === total,
     currentVolume,
     lastWorkoutVolume,
     volumeDelta: currentVolume - lastWorkoutVolume,

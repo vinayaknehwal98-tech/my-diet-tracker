@@ -205,6 +205,12 @@ function exposeGlobals() {
       getTodayWorkout,
       saveWorkoutLog,
       resetTodayWorkout,
+      clearExerciseLog,
+      undoLastWorkoutAction,
+      handleExerciseDoneToggle,
+      handleSetDoneToggle,
+      isExerciseActuallyLogged,
+      cleanEmptyExerciseLog,
       openWorkoutImportModal,
       closeWorkoutImportModal,
       handleWorkoutImportFile,
@@ -242,7 +248,7 @@ function exposeGlobals() {
 
 
 // --- INIT ---
-console.log("Diet Tracker version: performance-fix-1");
+console.log("Diet Tracker version: workout-completion-fix-1");
 exposeGlobals();
 renderAll();
 setTimeout(() => {
