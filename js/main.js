@@ -262,7 +262,7 @@ function exposeGlobals() {
 
 
 // --- INIT ---
-console.log("Diet Tracker version: food-scan-macro-fix-1");
+console.log("Diet Tracker version: move-import-buttons-1");
 exposeGlobals();
 renderAll();
 setTimeout(() => {
